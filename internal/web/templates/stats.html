@@ -1,0 +1,48 @@
+{{define "title"}}Stats — Swedish Cards{{end}}
+{{define "content"}}
+<h1>Stats</h1>
+
+{{if not .HasData}}
+<p class="hint">No reviews yet. <a href="/review">Start reviewing</a> to start collecting stats.</p>
+{{else}}
+<div class="stat-grid">
+    <div class="stat">
+        <div class="stat-num">{{.Streak}}</div>
+        <div class="stat-label">day streak</div>
+    </div>
+    <div class="stat">
+        <div class="stat-num">{{.TotalReviews}}</div>
+        <div class="stat-label">total reviews</div>
+    </div>
+    <div class="stat">
+        <div class="stat-num">{{.AccuracyPct}}%</div>
+        <div class="stat-label">accuracy</div>
+    </div>
+</div>
+
+<p class="muted">Last review: <strong>{{.LastReview}}</strong></p>
+
+<section>
+    <h2>Reviews in the last 30 days <span class="muted">({{.ReviewsTotal30d}} total)</span></h2>
+    {{template "chart" .ReviewsChart}}
+</section>
+
+<section>
+    <h2>Coming due in the next 14 days <span class="muted">({{.DueTotal14d}} total)</span></h2>
+    {{template "chart" .DueChart}}
+</section>
+{{end}}
+{{end}}
+
+{{define "chart"}}
+<svg viewBox="0 0 {{.Width}} {{.Height}}" class="chart" preserveAspectRatio="xMidYMid meet" role="img">
+    {{range .Bars}}
+    <rect x="{{.BarX}}" y="{{.BarY}}" width="{{.BarW}}" height="{{.BarH}}"
+          class="chart-bar{{if .IsToday}} chart-bar-today{{end}}{{if .IsWeekend}} chart-bar-weekend{{end}}"/>
+    {{if gt .Count 0}}
+    <text x="{{.ValueX}}" y="{{.ValueY}}" class="chart-value" text-anchor="middle">{{.Count}}</text>
+    {{end}}
+    <text x="{{.LabelX}}" y="{{.LabelY}}" class="chart-label" text-anchor="middle">{{.Label}}</text>
+    {{end}}
+</svg>
+{{end}}

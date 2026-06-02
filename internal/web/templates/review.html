@@ -1,0 +1,111 @@
+{{define "title"}}Review — Swedish Cards{{end}}
+{{define "content"}}
+<h1>Review</h1>
+
+{{template "card-area" .}}
+
+<script>
+    // Keyboard 1-4 picks choices in MC mode; Enter submits in fill-in mode.
+    document.addEventListener('keydown', function (e) {
+        const tag = e.target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        const area = document.getElementById('card-area');
+        if (!area) return;
+        if (['1', '2', '3', '4'].includes(e.key)) {
+            const btns = area.querySelectorAll('.choice-btn');
+            const idx = parseInt(e.key, 10) - 1;
+            if (btns[idx]) {
+                e.preventDefault();
+                btns[idx].click();
+            }
+        }
+    });
+</script>
+{{end}}
+
+{{define "card-area"}}
+<div id="card-area" class="card-area">
+    {{if .Last}}
+    <div class="result-ribbon {{if .Last.WasCorrect}}correct{{else}}wrong{{end}}">
+        <span class="ribbon-icon">{{if .Last.WasCorrect}}✓{{else}}✗{{end}}</span>
+        {{if .Last.IsCloze}}
+            <span class="ribbon-body">{{.Last.Filled}}</span>
+            {{if .Last.HintBelow}}<span class="ribbon-hint">— {{.Last.HintBelow}}</span>{{end}}
+            {{if not .Last.WasCorrect}}<span class="ribbon-pick">you picked: <em>{{.Last.Chosen}}</em></span>{{end}}
+        {{else}}
+            <span class="ribbon-body">
+                <strong>{{.Last.Front}}</strong>
+                {{if .Last.IsReverse}}{{if .Last.WasCorrect}}↔{{else}}↪{{end}}{{else}}{{if .Last.WasCorrect}}={{else}}→{{end}}{{end}}
+                <strong>{{.Last.Correct}}</strong>
+            </span>
+            {{if not .Last.WasCorrect}}<span class="ribbon-pick">you picked: <em>{{.Last.Chosen}}</em></span>{{end}}
+        {{end}}
+    </div>
+    {{end}}
+
+    {{if .Card}}
+    <div class="mode-badge mode-{{.Card.Mode}}">
+        {{if eq (printf "%s" .Card.Mode) "mc_translate"}}🇸🇪 → 🇬🇧 translate
+        {{else if eq (printf "%s" .Card.Mode) "mc_translate_rev"}}🇬🇧 → 🇸🇪 translate
+        {{else if eq (printf "%s" .Card.Mode) "mc_cloze"}}fill the blank
+        {{end}}
+    </div>
+
+    <div class="card{{if .Card.IsCloze}} card-cloze{{end}}">
+        <div class="card-front{{if .Card.IsCloze}} cloze-front{{end}}">{{.Card.Front}}</div>
+        {{if .Card.HintBelow}}<div class="cloze-hint">{{.Card.HintBelow}}</div>{{end}}
+    </div>
+
+    <form hx-post="/review/{{.Card.ID}}" hx-target="#card-area" hx-swap="outerHTML" class="quiz-form">
+        <input type="hidden" name="correct" value="{{.Card.Correct}}">
+        <input type="hidden" name="front" value="{{.Card.Front}}">
+        <input type="hidden" name="mode" value="{{.Card.Mode}}">
+        <input type="hidden" name="hint" value="{{.Card.HintBelow}}">
+
+        <div class="choice-grid">
+            {{range .Card.Choices}}
+            <button type="submit" name="choice" value="{{.}}" class="choice-btn">{{.}}</button>
+            {{end}}
+        </div>
+    </form>
+    {{else}}
+    <div class="done">
+        {{with .Empty}}
+        {{if and (gt .NewWaiting 0) (ge .NewIntroduced .NewCap)}}
+        <h2>Daily limit reached</h2>
+        <p>You've introduced <strong>{{.NewIntroduced}}</strong> new cards today (cap is <strong>{{.NewCap}}</strong>) and <strong>{{.NewWaiting}}</strong> more are waiting.</p>
+        <div class="extend-actions">
+            <form method="post" action="/settings/extend" style="display:inline">
+                <input type="hidden" name="n" value="5">
+                <button type="submit" class="btn primary">Practice 5 more</button>
+            </form>
+            <form method="post" action="/settings/extend" style="display:inline">
+                <input type="hidden" name="n" value="10">
+                <button type="submit" class="btn">Practice 10 more</button>
+            </form>
+            <a class="btn" href="/settings">Change cap</a>
+        </div>
+        {{else if gt .NewWaiting 0}}
+        <h2>Nothing due right now</h2>
+        <p><strong>{{.NewWaiting}}</strong> new cards queued; <strong>{{.NewIntroduced}}/{{.NewCap}}</strong> introduced today.</p>
+        {{else if .NextDueRel}}
+        <h2>All caught up</h2>
+        <p>Next due: <strong>{{.NextDueFront}}</strong> {{.NextDueRel}}.</p>
+        <div class="extend-actions">
+            <a class="btn primary" href="/review?early=1">Review next card anyway</a>
+        </div>
+        <p class="hint muted">Reviewing early still updates SRS state — the next due time pushes out from this review.</p>
+        {{else}}
+        <h2>No cards in the deck</h2>
+        <p><a href="/import">Import some notes</a> to get started.</p>
+        {{end}}
+        {{else}}
+        <h2>All done!</h2>
+        <p>No cards waiting.</p>
+        {{end}}
+        <a class="btn" href="/">Home</a>
+        <a class="btn" href="/import">Import</a>
+    </div>
+    {{end}}
+</div>
+{{end}}

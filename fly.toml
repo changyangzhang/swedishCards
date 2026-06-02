@@ -1,0 +1,45 @@
+# fly.toml app configuration file generated for swedish-cards on 2026-06-02T14:43:06+02:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'swedish-cards'
+primary_region = 'arn'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  DB_PATH = '/data/swedish.db'
+  GEMINI_MODEL = 'gemini-2.5-flash'
+  HTTP_ADDR = ':8080'
+
+[[mounts]]
+  source = 'data'
+  destination = '/data'
+  initial_size = '1gb'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 50
+    soft_limit = 25
+
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'
+  cpus = 1
+  memory_mb = 256

@@ -1,0 +1,35 @@
+{{define "title"}}Settings — Swedish Cards{{end}}
+{{define "content"}}
+<h1>Settings</h1>
+
+{{if .Saved}}<div class="summary"><p>✓ Saved.</p></div>{{end}}
+
+<form method="post" action="/settings" class="edit-form">
+    <label>
+        <span>New cards per day</span>
+        <input type="number" name="new_per_day" min="0" max="1000"
+               value="{{.NewPerDay}}" required>
+        <small class="muted">
+            How many never-reviewed cards can be introduced to the daily queue.
+            You've introduced {{.NewIntroduced}} so far today.
+        </small>
+    </label>
+
+    <div class="actions">
+        <button type="submit" class="btn primary">Save</button>
+        <a href="/" class="btn">Back</a>
+    </div>
+</form>
+
+<section>
+    <h2>About</h2>
+    <p class="muted">
+        AI enrichment:
+        {{if .LLMEnabled}}<strong>enabled</strong> ({{.LLMModel}}){{else}}disabled — set <code>GEMINI_API_KEY</code> in <code>.env</code>{{end}}.
+    </p>
+    <p class="muted">
+        <code>NEW_PER_DAY</code> in <code>.env</code> seeds this value on first run only.
+        Once you save here, the value persists in the database and the env var is ignored.
+    </p>
+</section>
+{{end}}

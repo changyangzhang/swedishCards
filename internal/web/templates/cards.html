@@ -1,0 +1,120 @@
+{{define "title"}}Cards — Swedish Cards{{end}}
+{{define "content"}}
+<h1>Cards <span class="muted">({{.Total}})</span></h1>
+
+{{if .Typos}}
+<section class="typo-list">
+    <h2>AI suggestions <span class="muted">({{len .Typos}})</span></h2>
+    <p class="hint">Gemini spotted these possible spelling fixes. Accept rewrites the entry and regenerates its cards (review history for those cards is lost). Dismiss keeps the original text.</p>
+    {{range .Typos}}
+    <div class="typo-row">
+        <div class="typo-text">
+            <code class="typo-old">{{.SwedishRaw}}</code>
+            <span class="typo-arrow">→</span>
+            <code class="typo-new">{{.Suggested}}</code>
+            <span class="kind kind-{{.Kind}}">{{.Kind}}</span>
+        </div>
+        <div class="typo-actions">
+            <form method="post" action="/entries/{{.EntryID}}/typo-accept" style="display:inline">
+                <button class="btn btn-sm primary" type="submit">Accept</button>
+            </form>
+            <form method="post" action="/entries/{{.EntryID}}/typo-dismiss" style="display:inline">
+                <button class="btn btn-sm" type="submit">Dismiss</button>
+            </form>
+        </div>
+    </div>
+    {{end}}
+</section>
+{{end}}
+
+{{if not .Rows}}
+<p class="hint">No cards yet. <a href="/import">Import some notes</a> to get started.</p>
+{{else}}
+
+<!-- Bulk-delete form lives outside the table so its checkboxes don't nest with
+     per-row delete forms. HTML5 form="bulk-delete-form" associates each
+     row checkbox with this form. -->
+<form id="bulk-delete-form" method="post" action="/cards/bulk-delete"
+      onsubmit="return confirmBulkDelete(this);">
+    <div class="bulk-bar">
+        <button type="submit" class="btn btn-danger btn-sm" disabled id="bulk-delete-btn">
+            Delete <span id="selected-count">0</span> selected
+        </button>
+        <span class="muted" id="bulk-summary"></span>
+    </div>
+</form>
+
+<div class="cards-wrap">
+    <table class="cards">
+        <thead>
+        <tr>
+            <th class="col-check">
+                <input type="checkbox" id="check-all" aria-label="Select all">
+            </th>
+            <th>Front</th>
+            <th class="col-back">Back</th>
+            <th>Kind</th>
+            <th>Reps</th>
+            <th>Due</th>
+            <th></th>
+        </tr>
+        </thead>
+        <tbody>
+        {{range .Rows}}
+        <tr>
+            <td class="col-check">
+                <input type="checkbox" class="card-check" name="card_ids" value="{{.ID}}" form="bulk-delete-form" aria-label="Select card">
+            </td>
+            <td>{{.Front}}</td>
+            <td class="col-back">{{.Back}}</td>
+            <td><span class="kind kind-{{.Kind}}">{{.Kind}}</span></td>
+            <td>{{.Reps}}</td>
+            <td>{{.DueRel}}</td>
+            <td class="row-actions">
+                <a href="/cards/{{.ID}}/edit" class="edit-link" title="Edit card">✎</a>
+                <form method="post" action="/cards/{{.ID}}/delete" style="display:inline"
+                      onsubmit="return confirm('Delete this card and its entry? This also removes any AI-generated example sentences for it.');">
+                    <button type="submit" class="delete-link" title="Delete card">🗑</button>
+                </form>
+            </td>
+        </tr>
+        {{end}}
+        </tbody>
+    </table>
+</div>
+
+<script>
+    (function () {
+        const checks = document.querySelectorAll('.card-check');
+        const all = document.getElementById('check-all');
+        const btn = document.getElementById('bulk-delete-btn');
+        const count = document.getElementById('selected-count');
+
+        function refresh() {
+            const selected = Array.from(checks).filter(c => c.checked).length;
+            count.textContent = selected;
+            btn.disabled = selected === 0;
+            if (all) all.checked = selected === checks.length && selected > 0;
+            if (all) all.indeterminate = selected > 0 && selected < checks.length;
+        }
+        checks.forEach(c => c.addEventListener('change', refresh));
+        if (all) {
+            all.addEventListener('change', () => {
+                checks.forEach(c => { c.checked = all.checked; });
+                refresh();
+            });
+        }
+        refresh();
+    })();
+
+    function confirmBulkDelete(form) {
+        // Checkboxes live outside the form (associated via form="..."), so
+        // form.querySelectorAll wouldn't see them. Count from the document.
+        const n = document.querySelectorAll('input[name="card_ids"]:checked').length;
+        if (n === 0) return false;
+        return confirm('Delete ' + n + ' card' + (n === 1 ? '' : 's') +
+            ' and their entries? This also removes any AI-generated example sentences for them.');
+    }
+</script>
+{{end}}
+{{end}}

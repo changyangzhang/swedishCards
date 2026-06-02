@@ -1,0 +1,39 @@
+{{define "title"}}Edit card — Swedish Cards{{end}}
+{{define "content"}}
+<h1>Edit card <span class="muted">#{{.Card.ID}}</span></h1>
+<p class="muted">
+    <span class="kind kind-{{.EntryKind}}">{{.EntryKind}}</span>
+    <span class="card-type">{{.Card.CardType}}</span>
+</p>
+
+{{if .Error}}<p class="hint warning">{{.Error}}</p>{{end}}
+
+<form method="post" action="/cards/{{.Card.ID}}/edit" class="edit-form">
+    <label>
+        <span>Front</span>
+        <textarea name="front" rows="3" required>{{.Card.Front}}</textarea>
+    </label>
+
+    <label>
+        <span>Back</span>
+        <textarea name="back" rows="3">{{.Card.Back}}</textarea>
+    </label>
+
+    {{if .IsCloze}}
+    <label>
+        <span>Cloze answer <small class="muted">(the blanked word)</small></span>
+        <input type="text" name="cloze_answer" value="{{if .Card.ClozeAnswer}}{{.ClozeAnswerStr}}{{end}}">
+    </label>
+    {{end}}
+
+    <div class="actions">
+        <button type="submit" class="btn primary">Save</button>
+        <a href="/cards" class="btn">Cancel</a>
+    </div>
+</form>
+
+<form method="post" action="/cards/{{.Card.ID}}/delete" style="margin-top: 2rem;"
+      onsubmit="return confirm('Delete this card and its entry? This also removes any AI-generated example sentences for it.');">
+    <button type="submit" class="btn btn-danger">Delete card</button>
+</form>
+{{end}}

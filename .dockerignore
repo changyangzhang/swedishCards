@@ -1,0 +1,12 @@
+.env
+.env.*
+data/
+*.db
+*.db-wal
+*.db-shm
+.idea/
+.git/
+.claude/
+.DS_Store
+README.md
+LICENSE
