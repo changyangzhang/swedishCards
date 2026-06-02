@@ -527,14 +527,16 @@ const (
 
 // quizCard is the per-render state of a review card.
 type quizCard struct {
-	ID          int64
-	Mode        quizMode
-	Front       string   // shown to the user
-	Correct     string   // grading answer for THIS render
-	Choices     []string // shuffled options including the correct answer
-	HintBelow   string   // optional sub-hint (e.g. English for cloze)
-	IsCloze     bool     // affects styling (monospace, gold border)
-	IsTranslate bool
+	ID               int64
+	Mode             quizMode
+	Front            string   // shown to the user
+	Correct          string   // grading answer for THIS render
+	Choices          []string // shuffled options including the correct answer
+	HintBelow        string   // optional sub-hint (e.g. English for cloze)
+	IsCloze          bool     // affects styling (monospace, gold border)
+	IsTranslate      bool
+	IsFrontSwedish   bool // speaker button on front speaks Swedish
+	IsChoicesSwedish bool // speaker buttons next to choices speak Swedish
 }
 
 // lastResult drives the green/red ribbon shown above the new card after a pick.
@@ -620,18 +622,22 @@ func (s *Server) prepareQuizCard(ctx context.Context, card *store.ReviewCard) (*
 	var distractorColumn string
 	switch mode {
 	case ModeMCTranslate:
-		q.Front = card.Front // Swedish
+		q.Front = card.Front  // Swedish
 		q.Correct = card.Back // English
 		q.IsTranslate = true
+		q.IsFrontSwedish = true
 		distractorColumn = "back"
 	case ModeMCTranslateRev:
-		q.Front = card.Back // English shown
+		q.Front = card.Back    // English shown
 		q.Correct = card.Front // Swedish expected
 		q.IsTranslate = true
+		q.IsChoicesSwedish = true
 		distractorColumn = "front"
 	case ModeMCCloze:
 		q.Front, q.Correct = rotateBlank(clozeSentence)
 		q.IsCloze = true
+		q.IsFrontSwedish = true
+		q.IsChoicesSwedish = true
 		if clozeEnglish != "" {
 			q.HintBelow = clozeEnglish
 		}

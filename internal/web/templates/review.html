@@ -20,6 +20,29 @@
             }
         }
     });
+
+    // ---- Swedish text-to-speech (Web Speech API; free, browser-native) ----
+    function speakSwedish(text) {
+        if (!('speechSynthesis' in window) || !text) return;
+        // Cancel anything in flight so back-to-back clicks don't queue up.
+        speechSynthesis.cancel();
+        // Cloze placeholders should be heard as a pause, not "underscore".
+        const cleaned = text.replace(/_+/g, ', ');
+        const utter = new SpeechSynthesisUtterance(cleaned);
+        utter.lang = 'sv-SE';
+        utter.rate = 0.9;
+        speechSynthesis.speak(utter);
+    }
+    // Capture-phase delegation: runs BEFORE the click bubbles to the choice
+    // button / form, so calling preventDefault here safely cancels the form
+    // submission when the user taps the speaker on a submit button.
+    document.addEventListener('click', function (e) {
+        const trigger = e.target.closest('.speak-btn, .speak-icon');
+        if (!trigger) return;
+        e.preventDefault();
+        e.stopPropagation();
+        speakSwedish(trigger.dataset.text);
+    }, true);
 </script>
 {{end}}
 
@@ -30,6 +53,7 @@
         <span class="ribbon-icon">{{if .Last.WasCorrect}}✓{{else}}✗{{end}}</span>
         {{if .Last.IsCloze}}
             <span class="ribbon-body">{{.Last.Filled}}</span>
+            <button type="button" class="speak-btn ribbon-speak" data-text="{{.Last.Filled}}" aria-label="Speak">🔊</button>
             {{if .Last.HintBelow}}<span class="ribbon-hint">— {{.Last.HintBelow}}</span>{{end}}
             {{if not .Last.WasCorrect}}<span class="ribbon-pick">you picked: <em>{{.Last.Chosen}}</em></span>{{end}}
         {{else}}
@@ -38,6 +62,9 @@
                 {{if .Last.IsReverse}}{{if .Last.WasCorrect}}↔{{else}}↪{{end}}{{else}}{{if .Last.WasCorrect}}={{else}}→{{end}}{{end}}
                 <strong>{{.Last.Correct}}</strong>
             </span>
+            <button type="button" class="speak-btn ribbon-speak"
+                    data-text="{{if .Last.IsReverse}}{{.Last.Correct}}{{else}}{{.Last.Front}}{{end}}"
+                    aria-label="Speak">🔊</button>
             {{if not .Last.WasCorrect}}<span class="ribbon-pick">you picked: <em>{{.Last.Chosen}}</em></span>{{end}}
         {{end}}
     </div>
@@ -52,7 +79,12 @@
     </div>
 
     <div class="card{{if .Card.IsCloze}} card-cloze{{end}}">
-        <div class="card-front{{if .Card.IsCloze}} cloze-front{{end}}">{{.Card.Front}}</div>
+        <div class="card-front{{if .Card.IsCloze}} cloze-front{{end}}">
+            <span>{{.Card.Front}}</span>
+            {{if .Card.IsFrontSwedish}}
+            <button type="button" class="speak-btn" data-text="{{.Card.Front}}" aria-label="Hör på svenska" title="Speak Swedish">🔊</button>
+            {{end}}
+        </div>
         {{if .Card.HintBelow}}<div class="cloze-hint">{{.Card.HintBelow}}</div>{{end}}
     </div>
 
@@ -64,7 +96,12 @@
 
         <div class="choice-grid">
             {{range .Card.Choices}}
-            <button type="submit" name="choice" value="{{.}}" class="choice-btn">{{.}}</button>
+            <button type="submit" name="choice" value="{{.}}" class="choice-btn">
+                <span class="choice-text">{{.}}</span>
+                {{if $.Card.IsChoicesSwedish}}
+                <span class="speak-icon" data-text="{{.}}" aria-label="Speak">🔊</span>
+                {{end}}
+            </button>
             {{end}}
         </div>
     </form>

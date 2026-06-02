@@ -746,6 +746,45 @@ func (s *Store) GetEntryByCardID(ctx context.Context, cardID int64) (*EntryRow, 
 	return &e, nil
 }
 
+// FixLegacyClozeFronts normalizes cards whose `front` still contains the
+// `____` placeholder from the pre-refactor schema (when cloze cards stored
+// the masked sentence as their front). After the 1-card-per-entry refactor,
+// the front should be the FULL Swedish text — rotateBlank inserts the blank
+// at render time. Returns the number of cards updated.
+func (s *Store) FixLegacyClozeFronts(ctx context.Context) (int, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT c.id, c.card_type, c.back, e.swedish_raw
+		FROM cards c JOIN entries e ON e.id = c.entry_id
+		WHERE instr(c.front, '____') > 0`)
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	type row struct {
+		id           int64
+		cardType     string
+		back         string
+		newFront     string
+	}
+	var fixes []row
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.id, &r.cardType, &r.back, &r.newFront); err != nil {
+			return 0, err
+		}
+		fixes = append(fixes, r)
+	}
+	for _, f := range fixes {
+		newHash := cardHash(model.CardType(f.cardType), f.newFront, f.back)
+		if _, err := s.db.ExecContext(ctx,
+			`UPDATE cards SET front = ?, hash = ? WHERE id = ?`,
+			f.newFront, newHash, f.id); err != nil {
+			return 0, fmt.Errorf("fix card %d: %w", f.id, err)
+		}
+	}
+	return len(fixes), nil
+}
+
 // PruneCards enforces the new "one card per entry, no cards for example_sentence
 // entries" invariant on existing data. Returns counts for logging.
 func (s *Store) PruneCards(ctx context.Context) (deleted int, err error) {

@@ -304,6 +304,56 @@ table.cards tr:last-child td { border-bottom: none; }
 
 .quiz-form { margin: 0; }
 
+/* Swedish text-to-speech buttons (Web Speech API) */
+.speak-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    margin-left: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--card-bg);
+    cursor: pointer;
+    font-size: 0.9rem;
+    line-height: 1;
+    vertical-align: middle;
+    padding: 0;
+    color: var(--fg);
+}
+.speak-btn:hover { border-color: var(--accent); background: var(--accent); }
+.speak-btn:active { transform: scale(0.95); }
+.speak-btn.ribbon-speak {
+    width: 26px;
+    height: 26px;
+    font-size: 0.8rem;
+    background: transparent;
+    border-color: currentColor;
+    opacity: 0.7;
+}
+.speak-btn.ribbon-speak:hover { opacity: 1; background: transparent; }
+
+.speak-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    margin-left: auto;
+    border-radius: 4px;
+    cursor: pointer;
+    opacity: 0.55;
+    font-size: 0.85rem;
+    flex-shrink: 0;
+}
+.speak-icon:hover { opacity: 1; background: rgba(0,0,0,0.08); }
+@media (prefers-color-scheme: dark) {
+    .speak-icon:hover { background: rgba(255,255,255,0.08); }
+}
+.choice-text { flex: 1; }
+.choice-btn { justify-content: flex-start; }
+
 .kbd {
     display: inline-block;
     padding: 0.1rem 0.4rem;

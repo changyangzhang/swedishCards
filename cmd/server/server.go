@@ -35,6 +35,11 @@ func Run() error {
 	if err := pruneCards(context.Background(), st); err != nil {
 		slog.Error("prune cards", "err", err)
 	}
+	if n, err := st.FixLegacyClozeFronts(context.Background()); err != nil {
+		slog.Error("fix legacy cloze fronts", "err", err)
+	} else if n > 0 {
+		slog.Info("fix legacy cloze fronts", "updated", n)
+	}
 	// Seed the new_per_day setting from env on first startup; subsequent
 	// startups respect whatever the user changed in /settings.
 	if err := st.SeedIntSettingIfAbsent(context.Background(), "new_per_day", cfg.NewPerDay); err != nil {
