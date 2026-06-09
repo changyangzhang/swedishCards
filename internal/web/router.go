@@ -32,6 +32,7 @@ func (s *Server) Router() http.Handler {
 
 		r.Get("/review", s.handleReview)
 		r.Post("/review/{id}", s.handleReviewPost)
+		r.Post("/review/{id}/delete", s.handleReviewDelete)
 
 		r.Get("/stats", s.handleStats)
 

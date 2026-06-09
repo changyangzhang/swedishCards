@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"time"
 
 	"google.golang.org/genai"
 
@@ -97,4 +99,96 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// ParsedAndEnrichedEntry is one row in ParseResult.Entries — Gemini has both
+// parsed it from raw notes AND filled in translation/grammar/typo data.
+type ParsedAndEnrichedEntry struct {
+	Swedish            string  `json:"swedish"`
+	Kind               string  `json:"kind"`
+	English            string  `json:"english"`
+	SuggestedClozeWord *string `json:"suggested_cloze_word"`
+	GrammarNote        *string `json:"grammar_note"`
+	TypoCorrection     *string `json:"typo_correction"`
+}
+
+// ParseExampleSentence references its parent by Swedish text rather than an
+// array index, since the input to ParseAndEnrich is raw text not an indexed
+// array.
+type ParseExampleSentence struct {
+	ParentSwedish string `json:"parent_swedish"`
+	Swedish       string `json:"swedish"`
+	English       string `json:"english"`
+	TargetWord    string `json:"target_word"`
+}
+
+// ParseResult is the decoded Gemini response for ParseAndEnrich.
+type ParseResult struct {
+	Entries          []ParsedAndEnrichedEntry `json:"entries"`
+	ExampleSentences []ParseExampleSentence   `json:"example_sentences"`
+}
+
+// ParseAndEnrich asks Gemini to BOTH parse free-form Swedish lesson notes AND
+// enrich them in a single call. Handles complex inputs that the heuristic
+// parser can't: section headers, tables, parenthetical context, bare Swedish
+// phrases without "=" separators. Retries once on transient errors (503/429).
+func (c *Client) ParseAndEnrich(ctx context.Context, rawText string) (*ParseResult, error) {
+	if strings.TrimSpace(rawText) == "" {
+		return &ParseResult{}, nil
+	}
+
+	temp := float32(0.2)
+	cfg := &genai.GenerateContentConfig{
+		SystemInstruction: genai.NewContentFromText(parseSystemPrompt, genai.RoleUser),
+		ResponseMIMEType:  "application/json",
+		ResponseSchema:    parseResponseSchema(),
+		Temperature:       &temp,
+		MaxOutputTokens:   16384,
+	}
+
+	var resp *genai.GenerateContentResponse
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err = c.sdk.Models.GenerateContent(ctx, c.model,
+			[]*genai.Content{genai.NewContentFromText(rawText, genai.RoleUser)},
+			cfg,
+		)
+		if err == nil {
+			break
+		}
+		if !isTransientGeminiError(err) {
+			return nil, fmt.Errorf("gemini parse: %w", err)
+		}
+		// Linear backoff: 2s, then 5s.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(2+3*attempt) * time.Second):
+		}
+	}
+	if err != nil {
+		return nil, fmt.Errorf("gemini parse (after retries): %w", err)
+	}
+
+	raw := resp.Text()
+	if raw == "" {
+		return nil, fmt.Errorf("empty response from gemini parse")
+	}
+
+	var result ParseResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return nil, fmt.Errorf("decode parse response: %w (raw=%s)", err, truncate(raw, 500))
+	}
+	return &result, nil
+}
+
+// isTransientGeminiError reports whether the error is one of Gemini's
+// "try again later" classes — 503 UNAVAILABLE (model overloaded) or 429
+// rate-limited. We retry these; we don't retry quota-exhaustion or 4xx
+// classes that won't change between attempts.
+func isTransientGeminiError(err error) bool {
+	s := err.Error()
+	return strings.Contains(s, "Error 503") ||
+		strings.Contains(s, "Error 429") ||
+		strings.Contains(s, "UNAVAILABLE")
 }

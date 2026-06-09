@@ -105,6 +105,15 @@
             {{end}}
         </div>
     </form>
+
+    <div class="review-card-actions">
+        <button type="button" class="btn btn-sm review-delete-btn"
+                hx-post="/review/{{.Card.ID}}/delete"
+                hx-target="#card-area" hx-swap="outerHTML"
+                hx-confirm="Delete this card and its entry from your deck? Any AI-generated example sentences for it will also be removed.">
+            🗑 Delete this card
+        </button>
+    </div>
     {{else}}
     <div class="done">
         {{with .Empty}}

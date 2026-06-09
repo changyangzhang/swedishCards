@@ -628,6 +628,18 @@ func (s *Store) GetDistractors(ctx context.Context, column string, excludeID int
 	return out, rows.Err()
 }
 
+// DeleteNote removes a note and (via FK cascade) all its entries, cards, and
+// reviews. Used by the import handler to roll back when smart-parse fails so
+// the user can retry the same paste.
+func (s *Store) DeleteNote(ctx context.Context, noteID int64) (int, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM notes WHERE id = ?`, noteID)
+	if err != nil {
+		return 0, fmt.Errorf("delete note: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 // DeleteEntryByCardID deletes the entry that owns this card. Schema cascades
 // then remove the card itself, its reviews, and any example_sentence entries
 // linked via source_entry_id. Returns the number of entries actually deleted

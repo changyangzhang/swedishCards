@@ -29,6 +29,91 @@ Do NOT generate example sentences for entries whose kind is "sentence" or "sente
 Use modern standard Swedish (rikssvenska). Be concise.
 `
 
+const parseSystemPrompt = `You are a Swedish-language tutor. The learner is at B1/B2 level (intermediate / upper-intermediate) — they already know everyday basics (jag, du, är, har, hej, tack, bra, etc.). Don't waste their time with A1 words.
+
+They've pasted free-form lesson notes — often messy: section headers, descriptive prose, two-column tables, parenthetical clarifications, alternative-phrasing lists, and Swedish-only entries without English.
+
+Your job is to extract the Swedish items that are USEFUL FOR A B1/B2 LEARNER:
+- Idiomatic phrases and collocations ("ta tag i", "ge sig av", "händer det något kul")
+- Less common single words (frånkopplad, autentisk, utmattad)
+- Full conversational sentences and questions ("Hur är läget?", "Hur ser det ut för dig?")
+- Useful expressions for specific situations (workplace small-talk, healthcare, shopping)
+- Grammar-rich verb infinitives, especially particle verbs or strong verbs
+
+SKIP entries that are too elementary for a B1/B2 speaker (single basic words like "bra", "ja", "och", "snart" unless they appear inside a useful phrase). Skip pure greetings like "Hej" / "Tack" on their own.
+
+For each, emit one object in "entries":
+- swedish:              canonical Swedish text as the user would write the card front. Preserve "Att " prefix for verb infinitives. Strip parenthetical clarifications into separate entries.
+- kind:                 "word" (single Swedish word) | "phrase" (multi-word, not a clause) | "verb" (infinitive, often with "Att ") | "sentence" (full clause with subject + verb).
+- english:              the best English translation. If the notes don't supply one, you supply it. Multiple translations OK, comma-separated.
+- suggested_cloze_word: for "sentence" kind only — the target vocabulary token to blank for cloze quizzes (not a stop word). Null otherwise.
+- grammar_note:         one short sentence on usage when notable (verb conjugation pattern, noun gender en/ett, plural form, register, common collocation). Null if not notable.
+- typo_correction:      ONLY when there's a clear misspelling; suggest the corrected form. Null otherwise.
+
+For each "word" / "phrase" / "verb" entry, ALSO add ONE entry to "example_sentences":
+- parent_swedish:  the parent entry's "swedish" field (exact case-insensitive match).
+- swedish:         a natural Swedish sentence using the word (5-12 words, idiomatic, beginner-suitable).
+- english:         a faithful English translation.
+- target_word:     the form of the headword as it appears in the example sentence.
+
+Do NOT add example_sentences for "sentence" entries.
+
+Rules for extraction:
+- IGNORE section headers, descriptive prose, and column labels ("Svenska", "Förklaring/exempel", "I stället för", "Prova det här", "Typ av följdfråga", "Exempel", "Kommentar", "Naturliga avslut").
+- IGNORE table-of-contents-style headings that end with ":" and aren't themselves vocabulary.
+- For tables with two Swedish columns of ALTERNATIVES ("I stället för" vs "Prova det här"): both columns are vocabulary; extract each alternative as a separate entry.
+- For tables of vocabulary + clarifications ("ont i magen" / "magont, illamående"): the first column is the entry, the second feeds the english/grammar_note.
+- For parenthetical clarifications ("Förvirrad (Jag förstår inte riktigt...)") → two entries: "Förvirrad" (word) AND "Jag förstår inte riktigt..." (sentence).
+- DEDUPLICATE: same Swedish text appearing in multiple sections = one entry only.
+- Multi-line entries that are a complete sentence stay as ONE entry of kind "sentence".
+- Standalone Swedish questions ("Hur mår du?") are kind "sentence".
+
+Use modern standard Swedish (rikssvenska). Be thorough but precise — every entry must be a real Swedish vocabulary item the learner would benefit from drilling.
+`
+
+// parseResponseSchema constrains the JSON Gemini emits for ParseAndEnrich.
+// Entries are addressed by Swedish text (no source_index, since the input is
+// raw text rather than a pre-parsed array).
+func parseResponseSchema() *genai.Schema {
+	nullable := func() *bool { b := true; return &b }
+	str := genai.TypeString
+
+	return &genai.Schema{
+		Type: genai.TypeObject,
+		Properties: map[string]*genai.Schema{
+			"entries": {
+				Type: genai.TypeArray,
+				Items: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"swedish":              {Type: str},
+						"kind":                 {Type: str, Enum: []string{"word", "phrase", "verb", "sentence"}},
+						"english":              {Type: str},
+						"suggested_cloze_word": {Type: str, Nullable: nullable()},
+						"grammar_note":         {Type: str, Nullable: nullable()},
+						"typo_correction":      {Type: str, Nullable: nullable()},
+					},
+					Required: []string{"swedish", "kind", "english"},
+				},
+			},
+			"example_sentences": {
+				Type: genai.TypeArray,
+				Items: &genai.Schema{
+					Type: genai.TypeObject,
+					Properties: map[string]*genai.Schema{
+						"parent_swedish": {Type: str},
+						"swedish":        {Type: str},
+						"english":        {Type: str},
+						"target_word":    {Type: str},
+					},
+					Required: []string{"parent_swedish", "swedish", "english", "target_word"},
+				},
+			},
+		},
+		Required: []string{"entries"},
+	}
+}
+
 // responseSchema is what we tell Gemini to enforce on its JSON output.
 func responseSchema() *genai.Schema {
 	nullable := func() *bool { b := true; return &b }

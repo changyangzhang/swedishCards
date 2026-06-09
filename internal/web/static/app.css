@@ -354,6 +354,24 @@ table.cards tr:last-child td { border-bottom: none; }
 .choice-text { flex: 1; }
 .choice-btn { justify-content: flex-start; }
 
+.review-card-actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 1.25rem;
+}
+.review-delete-btn {
+    color: var(--muted);
+    background: transparent;
+    border: 1px dashed var(--border);
+    font-size: 0.85rem;
+    padding: 0.35rem 0.85rem;
+}
+.review-delete-btn:hover {
+    color: #b91c1c;
+    border-color: #b91c1c;
+    border-style: solid;
+}
+
 .kbd {
     display: inline-block;
     padding: 0.1rem 0.4rem;

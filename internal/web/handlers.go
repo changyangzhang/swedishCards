@@ -106,16 +106,43 @@ func (s *Server) handleImportPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	summary := &importSummary{
-		ParsedEntries: len(parsed.Entries),
 		NoteDuplicate: !noteRes.Inserted,
 	}
 	if parsed.NoteDate != nil {
 		summary.NoteDate = parsed.NoteDate.Format("2006-01-02")
 	}
 
+	// When the LLM is configured AND this is a new note, let Gemini parse the
+	// raw text directly — it handles free-form notes (tables, prose, parens)
+	// that the heuristic parser can't. Otherwise fall back to the heuristic
+	// entries (works for the classic "Swedish = English" format and offline).
+	var entriesToInsert []model.ParsedEntry
+	var llmParseResult *llm.ParseResult
+	if noteRes.Inserted && s.llm != nil {
+		pr, err := s.smartParse(ctx, raw)
+		if err != nil {
+			// Don't insert anything when smart-parse fails — heuristic-parsed
+			// entries from free-form notes are usually low quality. Roll back
+			// the note row so the user can re-import once Gemini is back.
+			summary.EnrichmentError = err.Error()
+			slog.Warn("smart parse failed; rolling back note", "err", err, "note_id", noteRes.NoteID)
+			if _, derr := s.store.DeleteNote(ctx, noteRes.NoteID); derr != nil {
+				slog.Warn("rollback note delete", "err", derr)
+			}
+			s.renderer.Render(w, "import", importData{Summary: summary})
+			return
+		}
+		llmParseResult = pr
+		summary.EnrichmentRan = true
+		entriesToInsert = llmEntriesAsParsed(pr.Entries)
+	} else {
+		entriesToInsert = parsed.Entries
+	}
+	summary.ParsedEntries = len(entriesToInsert)
+
 	// 1) Insert entries.
-	states := make([]entryState, 0, len(parsed.Entries))
-	for _, e := range parsed.Entries {
+	states := make([]entryState, 0, len(entriesToInsert))
+	for _, e := range entriesToInsert {
 		entRes, err := s.store.InsertEntry(ctx, noteRes.NoteID, e)
 		if err != nil {
 			slog.Error("insert entry", "err", err, "swedish", e.Swedish)
@@ -133,19 +160,11 @@ func (s *Server) handleImportPost(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// 2) Enrich via Gemini ONLY for first-time imports. Re-importing the same
-	//    paste skips enrichment (we already paid for it) but still proceeds to
-	//    card generation so deleted cards can be reconstructed.
+	// 2) Apply Gemini-supplied enrichment + example sentences when smartParse
+	//    ran. When it didn't (offline / not first import), nothing happens here.
 	var exampleStates []entryState
-	if noteRes.Inserted && s.llm != nil {
-		ex, err := s.applyEnrichment(ctx, noteRes.NoteID, states, summary)
-		if err != nil {
-			summary.EnrichmentError = err.Error()
-			slog.Warn("enrichment failed; note remains pending", "err", err, "note_id", noteRes.NoteID)
-		} else {
-			summary.EnrichmentRan = true
-			exampleStates = ex
-		}
+	if llmParseResult != nil {
+		exampleStates = s.applySmartEnrichment(ctx, noteRes.NoteID, states, llmParseResult, summary)
 	}
 
 	// 3) Generate cards for originals + Gemini-generated example sentences,
@@ -175,6 +194,165 @@ func (s *Server) handleImportPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.renderer.Render(w, "import", importData{Summary: summary})
+}
+
+// handleReviewDelete is invoked from the review page when the user wants to
+// drop the card mid-session ("this card isn't worth learning"). Deletes the
+// underlying entry (cascade removes the card, its reviews, and any attached
+// example sentences) and renders the next card as an HTMX partial — same
+// shape as handleReviewPost's response, so the page swaps cleanly.
+func (s *Server) handleReviewDelete(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.store.DeleteEntryByCardID(ctx, id); err != nil {
+		slog.Error("delete entry by card id", "err", err, "card_id", id)
+		http.Error(w, "store error", http.StatusInternalServerError)
+		return
+	}
+
+	next, err := s.store.NextCardForReview(ctx, s.newPerDay(ctx))
+	if err != nil {
+		slog.Error("next after delete", "err", err)
+		http.Error(w, "store error", http.StatusInternalServerError)
+		return
+	}
+	q, err := s.prepareQuizCard(ctx, next)
+	if err != nil {
+		slog.Error("prepare next after delete", "err", err)
+		http.Error(w, "store error", http.StatusInternalServerError)
+		return
+	}
+	data := quizData{Card: q}
+	if q == nil {
+		data.Empty = s.buildEmptyState(ctx)
+	}
+	s.renderer.RenderPartial(w, "review", "card-area", data)
+}
+
+// smartParse delegates parsing to Gemini for free-form lesson notes the
+// heuristic parser can't handle (tables, prose, parens, B1/B2 phrase lists).
+// Returns the structured ParseResult ready for entry insertion.
+func (s *Server) smartParse(ctx context.Context, rawText string) (*llm.ParseResult, error) {
+	parseCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	return s.llm.ParseAndEnrich(parseCtx, rawText)
+}
+
+// llmEntriesAsParsed converts Gemini's parsed-and-enriched entries into the
+// model.ParsedEntry shape the rest of the import pipeline expects. Enrichment
+// fields (cloze hint, grammar note, typo correction) are NOT carried here —
+// they're applied separately via applySmartEnrichment after the entries get
+// their database IDs.
+func llmEntriesAsParsed(entries []llm.ParsedAndEnrichedEntry) []model.ParsedEntry {
+	out := make([]model.ParsedEntry, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, model.ParsedEntry{
+			Kind:       model.Kind(e.Kind),
+			Swedish:    canonicalSwedish(e.Swedish, model.Kind(e.Kind)),
+			SwedishRaw: e.Swedish,
+			English:    e.English,
+		})
+	}
+	return out
+}
+
+// canonicalSwedish mirrors the parser's canonicalization (lowercase, trim
+// trailing punctuation, strip "att " prefix for verbs) so smart-parsed entries
+// hash the same way heuristically-parsed ones do.
+func canonicalSwedish(s string, kind model.Kind) string {
+	out := strings.ToLower(strings.TrimSpace(s))
+	out = strings.TrimRight(out, ".!?")
+	out = strings.TrimSpace(out)
+	if kind == model.KindVerb && strings.HasPrefix(out, "att ") {
+		out = strings.TrimSpace(out[4:])
+	}
+	return out
+}
+
+// applySmartEnrichment writes Gemini-supplied enrichment fields back to the
+// just-inserted entries and creates example_sentence rows linked by Swedish
+// text. Returns entryStates for the new example sentences so cards get
+// generated for them in the caller's loop.
+func (s *Server) applySmartEnrichment(
+	ctx context.Context,
+	noteID int64,
+	states []entryState,
+	res *llm.ParseResult,
+	summary *importSummary,
+) []entryState {
+	now := time.Now().UTC()
+
+	// Build a Swedish-canonical → entryState index for cross-referencing
+	// example sentences and the LLM's per-entry enrichment data.
+	byCanonical := make(map[string]*entryState, len(states))
+	for i := range states {
+		byCanonical[strings.ToLower(strings.TrimSpace(states[i].parsed.Swedish))] = &states[i]
+	}
+
+	for _, en := range res.Entries {
+		key := strings.ToLower(strings.TrimSpace(canonicalSwedish(en.Swedish, model.Kind(en.Kind))))
+		st, ok := byCanonical[key]
+		if !ok {
+			continue // Gemini emitted an entry we didn't insert (rare)
+		}
+		if err := s.store.UpdateEntryEnrichment(ctx, store.EnrichEntryUpdate{
+			EntryID:            st.entryID,
+			English:            en.English,
+			SuggestedClozeWord: en.SuggestedClozeWord,
+			GrammarNote:        en.GrammarNote,
+			TypoCorrection:     en.TypoCorrection,
+			EnrichedAt:         now,
+		}); err != nil {
+			slog.Warn("update entry enrichment", "entry_id", st.entryID, "err", err)
+			continue
+		}
+		if en.English != "" {
+			st.finalEng = en.English
+		}
+		st.clozeHint = en.SuggestedClozeWord
+		if en.TypoCorrection != nil {
+			summary.TyposFlagged++
+		}
+	}
+
+	out := make([]entryState, 0, len(res.ExampleSentences))
+	for _, ex := range res.ExampleSentences {
+		parentKey := strings.ToLower(strings.TrimSpace(ex.ParentSwedish))
+		parent, ok := byCanonical[parentKey]
+		if !ok {
+			continue
+		}
+		exID, inserted, err := s.store.InsertExampleSentence(
+			ctx, noteID, parent.entryID, ex.Swedish, ex.English, ex.TargetWord, now,
+		)
+		if err != nil {
+			slog.Warn("insert example sentence", "err", err)
+			continue
+		}
+		if inserted {
+			summary.ExamplesAdded++
+		}
+		target := ex.TargetWord
+		out = append(out, entryState{
+			parsed: model.ParsedEntry{
+				Kind:       model.KindExampleSentence,
+				SwedishRaw: ex.Swedish,
+				English:    ex.English,
+			},
+			entryID:   exID,
+			finalEng:  ex.English,
+			clozeHint: &target,
+		})
+	}
+
+	if err := s.store.MarkNoteEnriched(ctx, noteID, now); err != nil {
+		slog.Warn("mark note enriched", "err", err)
+	}
+	return out
 }
 
 // applyEnrichment sends the parsed entries to Gemini, persists per-entry
