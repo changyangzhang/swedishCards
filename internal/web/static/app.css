@@ -354,6 +354,61 @@ table.cards tr:last-child td { border-bottom: none; }
 .choice-text { flex: 1; }
 .choice-btn { justify-content: flex-start; }
 
+.import-form { display: flex; flex-direction: column; gap: 0.5rem; }
+
+/* Loading state — toggled by the small inline script on form submit. */
+.import-form .import-btn-busy { display: none; }
+.import-form.is-importing .import-btn-idle { display: none; }
+.import-form.is-importing .import-btn-busy {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+.import-form.is-importing textarea,
+.import-form.is-importing .file-upload {
+    opacity: 0.55;
+    pointer-events: none;
+}
+.import-submit { min-height: 2.5rem; }
+
+/* Small inline spinner used in the import button (and reusable elsewhere). */
+.spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: sc-spin 0.8s linear infinite;
+    vertical-align: -2px;
+}
+@keyframes sc-spin {
+    to { transform: rotate(360deg); }
+}
+
+.file-upload {
+    display: block;
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    padding: 0.9rem 1rem;
+    background: var(--card-bg);
+    cursor: pointer;
+}
+.file-upload:hover { border-color: var(--accent); }
+.file-upload-label {
+    display: inline-block;
+    font-weight: 500;
+    margin-bottom: 0.35rem;
+    color: var(--accent);
+}
+.file-upload input[type="file"] {
+    display: block;
+    margin-top: 0.35rem;
+    color: var(--fg);
+    max-width: 100%;
+}
+.file-upload small { display: block; margin-top: 0.35rem; }
+
 .review-card-actions {
     display: flex;
     justify-content: center;

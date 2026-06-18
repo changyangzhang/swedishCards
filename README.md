@@ -10,26 +10,46 @@ decks or multi-tenancy.
 ## Features
 
 ### Notes → cards pipeline
-- Paste raw lesson notes (date headers, `Swedish = English` lines, bare
-  Swedish sentences) into the in-app textarea.
-- A heuristic parser classifies each line as `word` / `phrase` / `verb` /
-  `sentence` / `sentence_untranslated`.
-- Each entry produces **exactly one card** (no duplicate cards per concept).
-- Hash-based deduplication: re-pasting the same notes is a no-op, including
-  across imports.
+Two input modes on `/import`:
 
-### AI enrichment (Gemini 2.5 Flash, free tier)
-At import time, one batched call to Google's Gemini API fills in:
-- Missing English translations for bare Swedish sentences
+1. **Paste text** into the textarea. Works for the classic `Swedish = English`
+   format and the heuristic parser handles it offline (no API key needed).
+2. **Upload a file** — image (PNG/JPG/HEIC/WebP), PDF, or .txt/.md. Up to 8 MB.
+   Photos of handwritten or printed Swedish notes work directly; Gemini's
+   multimodal API does OCR + parsing in a single call. No local OCR library.
+
+A loading spinner shows on submit so you know the 10–30 s AI round-trip is in
+flight; the button disables to prevent double-submits.
+
+Each entry produces **exactly one card** (no duplicate cards per concept).
+Hash-based dedup: re-pasting the same notes or re-uploading the same file is
+a no-op.
+
+### AI parsing + enrichment (Gemini 2.5 Flash, free tier)
+When `GEMINI_API_KEY` is set, Gemini handles BOTH parsing and enrichment in
+one call, calibrated for a B1/B2 learner — skips elementary words, focuses on:
+- Idiomatic phrases and collocations (`ta tag i`, `ge sig av`)
+- Less-common vocabulary (`frånkopplad`, `utmattad`)
+- Full conversational sentences (`Hur är läget?`, `Hur ser det ut för dig?`)
+- Particle verbs and other grammar-rich infinitives
+
+For each entry Gemini also supplies:
+- English translation
 - One example sentence per word entry (used later for cloze prompts)
 - Smart cloze target words (which word in a sentence to blank)
 - One-sentence grammar notes (verb conjugation patterns, noun gender, etc.)
 - Typo flags ("Ingrendienser → Ingredienser")
 
-Uses the free Gemini API tier — no credit card needed. App degrades
-gracefully when `GEMINI_API_KEY` is unset (cards still get created via
-heuristic rules; example sentences and translations of bare sentences are
-skipped).
+Handles free-form notes the heuristic parser can't: section headers, tables,
+parenthetical clarifications, alternative-phrasing lists, bare Swedish
+without translations.
+
+Uses the free Gemini API tier — no credit card needed. Retries on transient
+503/429 with backoff (2s, 5s, 8s). If parsing fails entirely the note row is
+rolled back so you can retry once Gemini is back.
+
+App degrades gracefully when `GEMINI_API_KEY` is unset: the textarea path
+still works via the heuristic parser; file uploads require the key.
 
 ### Multiple-choice review
 Every review is multiple-choice. Each render of a card picks **a fresh
@@ -62,13 +82,15 @@ Standard Anki-style SM-2:
 - Default ease factor 2.5; floored at 1.3.
 - Intervals: 1 day → 6 days → `prev_interval × ease_factor`.
 - `Again` resets `repetitions` to 0 and bumps `lapses`.
-- Daily new-card cap (configurable; default 10) prevents drowning in
-  freshly-imported material.
+- **Daily review target** (configurable; default 10) covers BOTH new and
+  due-again cards combined. The queue serves a ~30%/70% mix of new vs
+  due-again, so you keep learning new material while maintaining what you
+  already know.
 
 ### Daily-cap UX
-The `/review` empty state explains *why* it's empty (cap reached, all
+The `/review` empty state explains *why* it's empty (target reached, all
 caught up, etc.) and offers concrete actions:
-- **"Practice 5 more"** / **"Practice 10 more"** — bump the daily cap
+- **"Practice 5 more"** / **"Practice 10 more"** — bump the daily target
   permanently (persisted to SQLite, takes effect immediately).
 - **"Review next card anyway"** — bypass the SM-2 schedule entirely and
   serve the soonest-due card, regardless of its actual due time. SRS state
@@ -83,6 +105,9 @@ caught up, etc.) and offers concrete actions:
 - AI-suggested typo corrections appear at the top of `/cards` with
   one-click **Accept** (rewrites the entry, regenerates cards) or
   **Dismiss**.
+- **🗑 Delete this card** button on every `/review` card — drop a card
+  mid-session if it isn't worth learning; the next card slides in via
+  HTMX swap (no full reload).
 
 ### Stats
 `/stats` shows streak, total reviews, accuracy %, a 30-day reviews
@@ -90,7 +115,7 @@ histogram, and a 14-day due-card forecast. All charts are inline SVG —
 no JS chart library.
 
 ### Settings (`/settings`)
-Adjust the daily new-card cap from the UI without touching `.env`. Saved
+Adjust the daily review target from the UI without touching `.env`. Saved
 value persists across restarts and overrides the env-var seed.
 
 ## Stack
@@ -130,7 +155,7 @@ free) in `.env` and re-run `docker compose up -d`.
 |---|---|---|
 | `GEMINI_API_KEY` | _empty_ | Enables AI enrichment. Free tier at https://aistudio.google.com/apikey. App works without it. |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Override the model. |
-| `NEW_PER_DAY` | `10` | **Seed only** — first-run default for the cap. After that, the value in `/settings` (DB-persisted) wins. |
+| `NEW_PER_DAY` | `10` | **Seed only** — first-run default for the daily review target (new + due combined). After that, the value in `/settings` (DB-persisted) wins. |
 | `BASIC_USER`, `BASIC_PASS` | _empty_ | HTTP Basic Auth. Both empty = auth disabled (fine for localhost; **set both before exposing the app publicly**). |
 | `DB_PATH` | `swedish.db` | SQLite file path. Docker compose mounts a host volume at `/data`. |
 | `HTTP_ADDR` | `:8080` | Listen address. |
@@ -185,9 +210,14 @@ anyone with the URL can use your deck and burn your Gemini quota.
 - Lesson notes, cards, and review history live in **one local SQLite file**.
 - Gemini API is called only at import time (one batched call per new note).
   No data leaves the machine for review / SM-2 / stats.
+- File uploads (images/PDFs) are NOT stored — the bytes go to Gemini in the
+  request body, then the in-memory copy is garbage-collected. `notes.raw_text`
+  records only the filename + sha256 + size as a stable dedup identifier.
 - TTS runs entirely in the browser (Web Speech API) — no audio leaves the
   device.
 - The `data/` directory is gitignored; never commit it.
+- Gemini's free tier may use inputs to improve Google's models per their
+  terms; upgrade to paid to opt out, or paste sensitive notes manually.
 
 ## License
 

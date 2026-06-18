@@ -2,7 +2,9 @@ package web
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
@@ -84,21 +86,105 @@ type entryState struct {
 	clozeHint *string // post-enrichment cloze target
 }
 
+// maxUploadBytes caps file uploads. Gemini's inline-data limit is ~20 MB but
+// for personal-deck-sized notes 8 MB is plenty and keeps the round-trip
+// snappy.
+const maxUploadBytes = 8 << 20
+
+// readUploadedFile pulls a single uploaded file out of an already-parsed
+// multipart form, capped at maxUploadBytes. Returns (nil, "", "", nil) when
+// no file was sent. mimeType is sniffed when the browser doesn't supply one.
+func readUploadedFile(r *http.Request) (data []byte, filename, mimeType string, err error) {
+	if r.MultipartForm == nil {
+		return nil, "", "", nil
+	}
+	files := r.MultipartForm.File["file"]
+	if len(files) == 0 {
+		return nil, "", "", nil
+	}
+	header := files[0]
+	if header.Size == 0 {
+		return nil, "", "", nil
+	}
+	f, err := header.Open()
+	if err != nil {
+		return nil, "", "", fmt.Errorf("open upload: %w", err)
+	}
+	defer f.Close()
+	data, err = io.ReadAll(io.LimitReader(f, maxUploadBytes+1))
+	if err != nil {
+		return nil, "", "", fmt.Errorf("read upload: %w", err)
+	}
+	if len(data) > maxUploadBytes {
+		return nil, "", "", fmt.Errorf("file too large (max %d bytes)", maxUploadBytes)
+	}
+	mimeType = header.Header.Get("Content-Type")
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		mimeType = http.DetectContentType(data)
+	}
+	return data, header.Filename, mimeType, nil
+}
+
+// supportedUploadMIME reports whether Gemini can ingest this file directly.
+func supportedUploadMIME(m string) bool {
+	switch m {
+	case "image/png", "image/jpeg", "image/jpg", "image/webp", "image/heic", "image/heif", "application/pdf":
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleImportPost(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	if err := r.ParseForm(); err != nil {
-		http.Error(w, "bad form", http.StatusBadRequest)
+	// multipart for file uploads; falls back to the urlencoded form for the
+	// classic textarea-paste path.
+	if err := r.ParseMultipartForm(maxUploadBytes); err != nil && err != http.ErrNotMultipart {
+		http.Error(w, "bad form: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
 	raw := r.FormValue("raw")
-	if raw == "" {
-		http.Error(w, "empty body", http.StatusBadRequest)
+
+	fileData, fileName, fileMIME, err := readUploadedFile(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	parsed := parser.ParseNotes(raw)
+	// text/* uploads are simpler as raw text — skip the multimodal path.
+	if fileData != nil && strings.HasPrefix(fileMIME, "text/") {
+		raw = string(fileData)
+		fileData = nil
+	}
 
-	noteRes, err := s.store.InsertNote(ctx, raw, parsed.NoteDate)
+	if raw == "" && fileData == nil {
+		http.Error(w, "empty body and no file", http.StatusBadRequest)
+		return
+	}
+
+	if fileData != nil {
+		if s.llm == nil {
+			http.Error(w, "file uploads require GEMINI_API_KEY (multimodal parsing). Paste text into the textarea instead.", http.StatusBadRequest)
+			return
+		}
+		if !supportedUploadMIME(fileMIME) {
+			http.Error(w, "unsupported file type: "+fileMIME+" (supported: image/png, image/jpeg, image/webp, image/heic, application/pdf, text/*)", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// For text input we use it directly as the note's raw_text. For file
+	// uploads we synthesise a stable identifier (name + sha256 + size) so the
+	// notes table can dedup re-uploads of the same file via its UNIQUE hash.
+	noteText := raw
+	if fileData != nil {
+		sum := sha256.Sum256(fileData)
+		noteText = fmt.Sprintf("FILE_UPLOAD: name=%s mime=%s size=%d sha256=%x", fileName, fileMIME, len(fileData), sum)
+	}
+
+	parsed := parser.ParseNotes(raw) // empty raw → empty Entries; still safe
+
+	noteRes, err := s.store.InsertNote(ctx, noteText, parsed.NoteDate)
 	if err != nil {
 		slog.Error("insert note", "err", err)
 		http.Error(w, "store error", http.StatusInternalServerError)
@@ -112,14 +198,19 @@ func (s *Server) handleImportPost(w http.ResponseWriter, r *http.Request) {
 		summary.NoteDate = parsed.NoteDate.Format("2006-01-02")
 	}
 
-	// When the LLM is configured AND this is a new note, let Gemini parse the
-	// raw text directly — it handles free-form notes (tables, prose, parens)
-	// that the heuristic parser can't. Otherwise fall back to the heuristic
-	// entries (works for the classic "Swedish = English" format and offline).
+	// When the LLM is configured AND this is a new note, let Gemini parse
+	// directly. For uploaded files this is the ONLY supported path (we don't
+	// run local OCR). For text, this also unlocks free-form note parsing.
 	var entriesToInsert []model.ParsedEntry
 	var llmParseResult *llm.ParseResult
 	if noteRes.Inserted && s.llm != nil {
-		pr, err := s.smartParse(ctx, raw)
+		var pr *llm.ParseResult
+		var err error
+		if fileData != nil {
+			pr, err = s.smartParseFile(ctx, fileData, fileMIME)
+		} else {
+			pr, err = s.smartParse(ctx, raw)
+		}
 		if err != nil {
 			// Don't insert anything when smart-parse fails — heuristic-parsed
 			// entries from free-form notes are usually low quality. Roll back
@@ -214,7 +305,7 @@ func (s *Server) handleReviewDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	next, err := s.store.NextCardForReview(ctx, s.newPerDay(ctx))
+	next, err := s.store.NextCardForReview(ctx, s.dailyTarget(ctx), newCardRatio)
 	if err != nil {
 		slog.Error("next after delete", "err", err)
 		http.Error(w, "store error", http.StatusInternalServerError)
@@ -240,6 +331,14 @@ func (s *Server) smartParse(ctx context.Context, rawText string) (*llm.ParseResu
 	parseCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	return s.llm.ParseAndEnrich(parseCtx, rawText)
+}
+
+// smartParseFile is the multimodal sibling of smartParse: Gemini OCRs the
+// uploaded image / reads the PDF and produces the same ParseResult shape.
+func (s *Server) smartParseFile(ctx context.Context, data []byte, mimeType string) (*llm.ParseResult, error) {
+	parseCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+	return s.llm.ParseAndEnrichFile(parseCtx, data, mimeType)
 }
 
 // llmEntriesAsParsed converts Gemini's parsed-and-enriched entries into the
@@ -554,7 +653,7 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	d, _ := s.store.DiagnoseEmptyQueue(ctx)
 	data := settingsData{
-		NewPerDay:  s.newPerDay(ctx),
+		NewPerDay:  s.dailyTarget(ctx),
 		Saved:      r.URL.Query().Get("saved") == "1",
 		LLMEnabled: s.cfg.GeminiAPIKey != "",
 		LLMModel:   s.cfg.GeminiModel,
@@ -598,7 +697,7 @@ func (s *Server) handleSettingsExtend(w http.ResponseWriter, r *http.Request) {
 	if err != nil || delta <= 0 || delta > 100 {
 		delta = 5
 	}
-	cur := s.newPerDay(ctx)
+	cur := s.dailyTarget(ctx)
 	if err := s.store.SetIntSetting(ctx, "new_per_day", cur+delta); err != nil {
 		slog.Error("extend setting", "err", err)
 		http.Error(w, "store error", http.StatusInternalServerError)
@@ -731,10 +830,12 @@ type lastResult struct {
 }
 
 type emptyState struct {
-	NewWaiting    int
-	NewIntroduced int
-	NewCap        int
-	NextDueRel    string
+	NewWaiting    int    // cards never reviewed
+	DueWaiting    int    // cards reviewed before, due now
+	ReviewsToday  int    // total reviews today (new + due)
+	NewIntroduced int    // of ReviewsToday, the new ones
+	DailyTarget   int    // total cap for new + due combined
+	NextDueRel    string // "in 18h" / "in 3d" for the soonest future-due card
 	NextDueFront  string
 }
 
@@ -841,7 +942,7 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	if early {
 		card, err = s.store.NextCardEarly(ctx)
 	} else {
-		card, err = s.store.NextCardForReview(ctx, s.newPerDay(ctx))
+		card, err = s.store.NextCardForReview(ctx, s.dailyTarget(ctx), newCardRatio)
 	}
 	if err != nil {
 		slog.Error("next card", "err", err)
@@ -861,12 +962,19 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	s.renderer.Render(w, "review", data)
 }
 
-// newPerDay reads the current daily-new-card cap from the settings table,
-// falling back to the env-seeded value on error.
-func (s *Server) newPerDay(ctx context.Context) int {
+// newCardRatio: of the daily review budget, what share is aimed at brand-new
+// cards. The rest goes to due (already-seen) cards. Hardcoded for now —
+// callers don't expose it. Adjust if the deck balance feels off.
+const newCardRatio = 0.30
+
+// dailyTarget reads the current daily-review budget (new + due combined) from
+// the settings table, falling back to the env-seeded value on error. The
+// setting key is "new_per_day" for back-compat with earlier versions where
+// the cap only applied to new cards.
+func (s *Server) dailyTarget(ctx context.Context) int {
 	n, err := s.store.GetIntSetting(ctx, "new_per_day", s.cfg.NewPerDay)
 	if err != nil {
-		slog.Warn("read new_per_day setting", "err", err)
+		slog.Warn("read daily target setting", "err", err)
 		return s.cfg.NewPerDay
 	}
 	return n
@@ -876,12 +984,14 @@ func (s *Server) buildEmptyState(ctx context.Context) *emptyState {
 	d, err := s.store.DiagnoseEmptyQueue(ctx)
 	if err != nil {
 		slog.Warn("diagnose empty queue", "err", err)
-		return &emptyState{NewCap: s.newPerDay(ctx)}
+		return &emptyState{DailyTarget: s.dailyTarget(ctx)}
 	}
 	es := &emptyState{
 		NewWaiting:    d.NewWaiting,
+		DueWaiting:    d.DueWaiting,
+		ReviewsToday:  d.ReviewsToday,
 		NewIntroduced: d.NewIntroduced,
-		NewCap:        s.newPerDay(ctx),
+		DailyTarget:   s.dailyTarget(ctx),
 		NextDueFront:  d.NextDueFront,
 	}
 	if d.NextDueAt != nil {
@@ -980,7 +1090,7 @@ func (s *Server) handleReviewPost(w http.ResponseWriter, r *http.Request) {
 		last.Filled = strings.Replace(frontShown, "____", correct, 1)
 	}
 
-	next, err := s.store.NextCardForReview(ctx, s.newPerDay(ctx))
+	next, err := s.store.NextCardForReview(ctx, s.dailyTarget(ctx), newCardRatio)
 	if err != nil {
 		slog.Error("next after review", "err", err)
 		http.Error(w, "store error", http.StatusInternalServerError)

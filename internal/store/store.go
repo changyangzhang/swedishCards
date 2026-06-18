@@ -949,7 +949,9 @@ func (s *Store) UpdateCard(ctx context.Context, id int64, front, back string, cl
 // QueueDiagnostic explains why NextCardForReview returned no card.
 type QueueDiagnostic struct {
 	NewWaiting     int        // cards never reviewed
-	NewIntroduced  int        // reviews today where prev_interval=0
+	DueWaiting     int        // cards reviewed before, due now
+	ReviewsToday   int        // total reviews today (new + due)
+	NewIntroduced  int        // of ReviewsToday, those where prev_interval=0
 	NextDueAt      *time.Time // earliest future-due card, if any
 	NextDueFront   string
 }
@@ -960,6 +962,16 @@ func (s *Store) DiagnoseEmptyQueue(ctx context.Context) (*QueueDiagnostic, error
 
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM cards WHERE last_reviewed IS NULL`).Scan(&d.NewWaiting); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM cards WHERE last_reviewed IS NOT NULL AND due_at <= datetime('now')`).
+		Scan(&d.DueWaiting); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM reviews WHERE reviewed_at >= date('now')`).
+		Scan(&d.ReviewsToday); err != nil {
 		return nil, err
 	}
 	if err := s.db.QueryRowContext(ctx,
@@ -1062,49 +1074,93 @@ func scanReviewCard(row interface {
 
 const reviewCardCols = `id, card_type, front, back, cloze_answer, ease_factor, interval_days, repetitions, lapses, due_at, last_reviewed`
 
-// NextCardForReview returns the next card the user should see, or nil if none.
+// NextCardForReview returns the next card the user should see, or nil if no
+// card is eligible right now.
 //
-// Order of preference:
-//  1. A card that's already been reviewed before and is due now (oldest first).
-//  2. A new card that has never been reviewed, IF fewer than newPerDay new cards
-//     have been introduced today.
-func (s *Store) NextCardForReview(ctx context.Context, newPerDay int) (*ReviewCard, error) {
-	// Due review.
+// `dailyTarget` is the TOTAL daily-review budget — new cards + due-again cards
+// combined — so the user gets a steady mix every day instead of "20 brand-new
+// cards" or "200 reviews of old cards" depending on deck state. Once the
+// budget is spent, the queue returns nil even if more cards are technically
+// available; the user can override with /settings/extend or the
+// "Review next card anyway" button.
+//
+// Within the budget, when both kinds are available, the routine prefers
+// whichever side is currently under its target share. newTargetRatio (e.g.
+// 0.30 = 30%) is the share of the budget aimed at NEW cards. Due cards take
+// the rest — keeping SRS schedules timely takes priority on a tie.
+func (s *Store) NextCardForReview(ctx context.Context, dailyTarget int, newTargetRatio float64) (*ReviewCard, error) {
+	if dailyTarget <= 0 {
+		return nil, nil
+	}
+
+	var totalToday, newToday int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT
+		   COUNT(*),
+		   COALESCE(SUM(CASE WHEN prev_interval = 0 THEN 1 ELSE 0 END), 0)
+		 FROM reviews
+		 WHERE reviewed_at >= date('now')`).Scan(&totalToday, &newToday); err != nil {
+		return nil, fmt.Errorf("count reviews today: %w", err)
+	}
+	if totalToday >= dailyTarget {
+		return nil, nil
+	}
+
+	dueCard, err := s.peekDueCard(ctx)
+	if err != nil {
+		return nil, err
+	}
+	newCard, err := s.peekNewCard(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// If only one side is available, serve that.
+	if dueCard != nil && newCard == nil {
+		return dueCard, nil
+	}
+	if newCard != nil && dueCard == nil {
+		return newCard, nil
+	}
+	if dueCard == nil && newCard == nil {
+		return nil, nil
+	}
+
+	// Both available — pick by ratio. If we haven't hit the new-card share
+	// yet, serve a new one; otherwise serve due. With totalToday==0 we treat
+	// the share as 0 so the FIRST card of the day is new whenever newRatio > 0
+	// — feels like the user is learning something fresh each session.
+	var newShare float64
+	if totalToday > 0 {
+		newShare = float64(newToday) / float64(totalToday)
+	}
+	if newShare < newTargetRatio {
+		return newCard, nil
+	}
+	return dueCard, nil
+}
+
+func (s *Store) peekDueCard(ctx context.Context) (*ReviewCard, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT `+reviewCardCols+` FROM cards
 		 WHERE last_reviewed IS NOT NULL AND due_at <= datetime('now')
 		 ORDER BY due_at ASC LIMIT 1`)
 	c, err := scanReviewCard(row)
-	if err == nil {
-		return c, nil
-	}
-	if err != sql.ErrNoRows {
-		return nil, fmt.Errorf("query due card: %w", err)
-	}
-
-	// New card, capped per day.
-	var introducedToday int
-	err = s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM reviews WHERE reviewed_at >= date('now') AND prev_interval = 0`).
-		Scan(&introducedToday)
-	if err != nil {
-		return nil, fmt.Errorf("count new introductions: %w", err)
-	}
-	if introducedToday >= newPerDay {
-		return nil, nil
-	}
-
-	row = s.db.QueryRowContext(ctx,
-		`SELECT `+reviewCardCols+` FROM cards
-		 WHERE last_reviewed IS NULL ORDER BY id ASC LIMIT 1`)
-	c, err = scanReviewCard(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("query new card: %w", err)
+	return c, err
+}
+
+func (s *Store) peekNewCard(ctx context.Context) (*ReviewCard, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+reviewCardCols+` FROM cards
+		 WHERE last_reviewed IS NULL ORDER BY id ASC LIMIT 1`)
+	c, err := scanReviewCard(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
 	}
-	return c, nil
+	return c, err
 }
 
 // NextCardEarly returns the soonest-due card, ignoring whether its due_at has

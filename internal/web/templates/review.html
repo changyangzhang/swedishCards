@@ -117,9 +117,12 @@
     {{else}}
     <div class="done">
         {{with .Empty}}
-        {{if and (gt .NewWaiting 0) (ge .NewIntroduced .NewCap)}}
+        {{if and (ge .ReviewsToday .DailyTarget) (or (gt .NewWaiting 0) (gt .DueWaiting 0))}}
         <h2>Daily limit reached</h2>
-        <p>You've introduced <strong>{{.NewIntroduced}}</strong> new cards today (cap is <strong>{{.NewCap}}</strong>) and <strong>{{.NewWaiting}}</strong> more are waiting.</p>
+        <p>You've reviewed <strong>{{.ReviewsToday}}/{{.DailyTarget}}</strong> cards today
+            ({{.NewIntroduced}} new, {{sub .ReviewsToday .NewIntroduced}} due-again).</p>
+        {{if gt .NewWaiting 0}}<p class="muted"><strong>{{.NewWaiting}}</strong> new card(s) still queued.</p>{{end}}
+        {{if gt .DueWaiting 0}}<p class="muted"><strong>{{.DueWaiting}}</strong> due card(s) waiting.</p>{{end}}
         <div class="extend-actions">
             <form method="post" action="/settings/extend" style="display:inline">
                 <input type="hidden" name="n" value="5">
@@ -129,18 +132,19 @@
                 <input type="hidden" name="n" value="10">
                 <button type="submit" class="btn">Practice 10 more</button>
             </form>
-            <a class="btn" href="/settings">Change cap</a>
+            <a class="btn" href="/settings">Change target</a>
         </div>
-        {{else if gt .NewWaiting 0}}
-        <h2>Nothing due right now</h2>
-        <p><strong>{{.NewWaiting}}</strong> new cards queued; <strong>{{.NewIntroduced}}/{{.NewCap}}</strong> introduced today.</p>
         {{else if .NextDueRel}}
         <h2>All caught up</h2>
-        <p>Next due: <strong>{{.NextDueFront}}</strong> {{.NextDueRel}}.</p>
+        <p>Reviewed <strong>{{.ReviewsToday}}/{{.DailyTarget}}</strong> today.
+            Next due: <strong>{{.NextDueFront}}</strong> {{.NextDueRel}}.</p>
         <div class="extend-actions">
             <a class="btn primary" href="/review?early=1">Review next card anyway</a>
         </div>
         <p class="hint muted">Reviewing early still updates SRS state — the next due time pushes out from this review.</p>
+        {{else if gt .NewWaiting 0}}
+        <h2>Nothing due right now</h2>
+        <p><strong>{{.NewWaiting}}</strong> new card(s) queued; <strong>{{.ReviewsToday}}/{{.DailyTarget}}</strong> reviewed today.</p>
         {{else}}
         <h2>No cards in the deck</h2>
         <p><a href="/import">Import some notes</a> to get started.</p>

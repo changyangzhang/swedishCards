@@ -131,12 +131,40 @@ type ParseResult struct {
 // ParseAndEnrich asks Gemini to BOTH parse free-form Swedish lesson notes AND
 // enrich them in a single call. Handles complex inputs that the heuristic
 // parser can't: section headers, tables, parenthetical context, bare Swedish
-// phrases without "=" separators. Retries once on transient errors (503/429).
+// phrases without "=" separators. Retries on transient errors (503/429).
 func (c *Client) ParseAndEnrich(ctx context.Context, rawText string) (*ParseResult, error) {
 	if strings.TrimSpace(rawText) == "" {
 		return &ParseResult{}, nil
 	}
+	return c.parseContent(ctx, []*genai.Content{
+		genai.NewContentFromText(rawText, genai.RoleUser),
+	})
+}
 
+// ParseAndEnrichFile extracts text from an uploaded image or PDF using Gemini's
+// multimodal input, then parses + enriches in the same call. Saves the
+// round-trip of a separate OCR step.
+//
+// Supported mime types: image/png, image/jpeg, image/webp, image/heic,
+// image/heif, application/pdf. For text/plain, callers should hand the bytes
+// to ParseAndEnrich(string(bytes)) instead — that's strictly cheaper.
+func (c *Client) ParseAndEnrichFile(ctx context.Context, data []byte, mimeType string) (*ParseResult, error) {
+	if len(data) == 0 {
+		return &ParseResult{}, nil
+	}
+	parts := []*genai.Part{
+		{InlineData: &genai.Blob{MIMEType: mimeType, Data: data}},
+		{Text: "These are the learner's Swedish lesson notes (image or PDF). Read the content carefully and extract Swedish vocabulary items per the system instructions."},
+	}
+	return c.parseContent(ctx, []*genai.Content{{
+		Role:  genai.RoleUser,
+		Parts: parts,
+	}})
+}
+
+// parseContent runs the parse-and-enrich call against arbitrary content
+// (text-only or multimodal). Shared by ParseAndEnrich and ParseAndEnrichFile.
+func (c *Client) parseContent(ctx context.Context, contents []*genai.Content) (*ParseResult, error) {
 	temp := float32(0.2)
 	cfg := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(parseSystemPrompt, genai.RoleUser),
@@ -149,17 +177,13 @@ func (c *Client) ParseAndEnrich(ctx context.Context, rawText string) (*ParseResu
 	var resp *genai.GenerateContentResponse
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		resp, err = c.sdk.Models.GenerateContent(ctx, c.model,
-			[]*genai.Content{genai.NewContentFromText(rawText, genai.RoleUser)},
-			cfg,
-		)
+		resp, err = c.sdk.Models.GenerateContent(ctx, c.model, contents, cfg)
 		if err == nil {
 			break
 		}
 		if !isTransientGeminiError(err) {
 			return nil, fmt.Errorf("gemini parse: %w", err)
 		}
-		// Linear backoff: 2s, then 5s.
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

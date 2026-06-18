@@ -19,11 +19,17 @@ type Renderer struct {
 	templates map[string]*template.Template
 }
 
+// templateFuncs are available in every page template.
+var templateFuncs = template.FuncMap{
+	"sub": func(a, b int) int { return a - b },
+}
+
 func NewRenderer() (*Renderer, error) {
 	pages := []string{"home", "import", "cards", "review", "stats", "card_edit", "settings"}
 	r := &Renderer{templates: make(map[string]*template.Template)}
 	for _, p := range pages {
-		tmpl, err := template.ParseFS(templateFS, "templates/layout.html", "templates/"+p+".html")
+		tmpl, err := template.New(p).Funcs(templateFuncs).ParseFS(
+			templateFS, "templates/layout.html", "templates/"+p+".html")
 		if err != nil {
 			return nil, fmt.Errorf("parse template %s: %w", p, err)
 		}

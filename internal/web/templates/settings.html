@@ -6,12 +6,13 @@
 
 <form method="post" action="/settings" class="edit-form">
     <label>
-        <span>New cards per day</span>
+        <span>Daily review target</span>
         <input type="number" name="new_per_day" min="0" max="1000"
                value="{{.NewPerDay}}" required>
         <small class="muted">
-            How many never-reviewed cards can be introduced to the daily queue.
-            You've introduced {{.NewIntroduced}} so far today.
+            Total cards to review per day — new + due-again combined. The queue mixes
+            roughly 30% new with 70% already-seen cards, so you keep learning new
+            material while maintaining what you already know.
         </small>
     </label>
 

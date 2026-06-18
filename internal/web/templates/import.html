@@ -30,14 +30,40 @@
 </div>
 {{end}}
 
-<form method="post" action="/import">
-    <p>Paste lesson notes below. One entry per line, format <code>Swedish = English</code>, or just a bare Swedish sentence. Optionally start with a date header like <code>1/6/26</code>.</p>
-    <textarea name="raw" rows="20" required placeholder="1/6/26
+<form method="post" action="/import" enctype="multipart/form-data" class="import-form">
+    <p>Paste lesson notes below — or upload an image, PDF, or .txt of your notes and Gemini will read it for you.</p>
+
+    <label class="file-upload">
+        <span class="file-upload-label">📎 Upload image / PDF / text file</span>
+        <input type="file" name="file" accept="image/*,application/pdf,text/plain,.txt,.md">
+        <small class="muted">Photos of handwritten notes work too. Max 8 MB. Requires <code>GEMINI_API_KEY</code>.</small>
+    </label>
+
+    <p class="hint muted">— or paste text below —</p>
+
+    <textarea name="raw" rows="14" placeholder="1/6/26
 
 Praktiskt = convenient, practical
 Att fastna = to get stuck
 Jag tränar med vikter
 ">{{.Raw}}</textarea>
-    <button type="submit" class="btn primary">Import</button>
+
+    <button type="submit" class="btn primary import-submit">
+        <span class="import-btn-idle">Import</span>
+        <span class="import-btn-busy"><span class="spinner"></span> Importing… (10–30 s for AI parsing)</span>
+    </button>
 </form>
+
+<script>
+    (function () {
+        const form = document.querySelector('.import-form');
+        if (!form) return;
+        form.addEventListener('submit', function () {
+            // Mark form busy; CSS swaps the button label and dims the textarea.
+            form.classList.add('is-importing');
+            const btn = form.querySelector('button[type="submit"]');
+            if (btn) btn.disabled = true;
+        });
+    })();
+</script>
 {{end}}
