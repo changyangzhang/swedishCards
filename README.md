@@ -71,6 +71,19 @@ Reviewing the same card twice in a row never looks identical:
 Auto-graded: correct → SM-2 `Good`; wrong → `Again`. No self-rating. A small
 ribbon at the top shows the previous answer's result before each new card.
 
+### Type-in mode (difficulty ramp)
+Once you've gotten a Swedish-answer card right twice in a row
+(`repetitions >= 2`), it switches from multiple choice to a text input —
+you have to actually write the word. A ⌨️ badge on the mode chip signals
+the harder mode. Any wrong answer resets `repetitions` to 0, so the card
+drops back to MC while you rebuild the streak.
+
+- Applies to `mc_translate_rev` (En → Sv) and `mc_cloze` only. `mc_translate`
+  (Sv → En) stays multiple choice — typing English isn't the learning goal.
+- Grading is lenient: case-insensitive, diacritics optional
+  (`tranar` matches `tränar`), trailing punctuation ignored. Trains recall
+  without punishing phone-keyboard fumbles.
+
 ### Text-to-speech
 🔊 buttons next to every Swedish text element. Uses the browser's Web Speech
 API (free, runs on-device) with `lang="sv-SE"`. Chrome on Android uses

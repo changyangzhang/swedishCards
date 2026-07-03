@@ -301,8 +301,26 @@ table.cards tr:last-child td { border-bottom: none; }
 }
 .mode-mc_cloze, .mode-fill_cloze { border-left: 3px solid var(--gold); }
 .mode-mc_translate, .mode-fill_translate { border-left: 3px solid var(--accent); }
+.mode-typein { background: #3a2a10; color: #ffd486; border-color: #7a5a20; }
+.badge-typein { margin-left: 0.5rem; font-weight: 600; letter-spacing: 0.02em; }
 
 .quiz-form { margin: 0; }
+
+/* Type-in mode (harder than MC — text input instead of choice grid) */
+.type-in { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 0.5rem; }
+.type-in-input {
+    width: 100%;
+    padding: 0.75rem 0.9rem;
+    font-size: 1.15rem;
+    font-family: inherit;
+    border: 2px solid var(--border);
+    border-radius: 8px;
+    background: var(--card-bg);
+    color: var(--fg);
+    box-sizing: border-box;
+}
+.type-in-input:focus { outline: none; border-color: var(--accent); }
+.type-in-submit { align-self: flex-start; }
 
 /* Swedish text-to-speech buttons (Web Speech API) */
 .speak-btn {

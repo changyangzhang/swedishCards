@@ -97,3 +97,26 @@ func TestBuildChoices_NoDistractors(t *testing.T) {
 		t.Errorf("expected [right], got %v", out)
 	}
 }
+
+func TestAnswersMatch_LenientOnDiacriticsAndCase(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"tränar", "tranar", true},
+		{"Vikter", "vikter", true},
+		{"Är", "ar", true},
+		{"Hörnet", "hornet", true},
+		{"åka", "aka", true},
+		{"tränar.", "tränar", true},
+		{"  tränar  ", "tränar", true},
+		{"café", "cafe", true},
+		{"tränar", "vikter", false},
+		{"", "vikter", false},
+	}
+	for _, c := range cases {
+		if got := answersMatch(c.a, c.b); got != c.want {
+			t.Errorf("answersMatch(%q,%q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}

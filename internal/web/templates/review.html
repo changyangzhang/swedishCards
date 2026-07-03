@@ -71,11 +71,12 @@
     {{end}}
 
     {{if .Card}}
-    <div class="mode-badge mode-{{.Card.Mode}}">
+    <div class="mode-badge mode-{{.Card.Mode}}{{if .Card.IsTypeIn}} mode-typein{{end}}">
         {{if eq (printf "%s" .Card.Mode) "mc_translate"}}🇸🇪 → 🇬🇧 translate
         {{else if eq (printf "%s" .Card.Mode) "mc_translate_rev"}}🇬🇧 → 🇸🇪 translate
         {{else if eq (printf "%s" .Card.Mode) "mc_cloze"}}fill the blank
         {{end}}
+        {{if .Card.IsTypeIn}}<span class="badge-typein">⌨️ type it</span>{{end}}
     </div>
 
     <div class="card{{if .Card.IsCloze}} card-cloze{{end}}">
@@ -94,6 +95,16 @@
         <input type="hidden" name="mode" value="{{.Card.Mode}}">
         <input type="hidden" name="hint" value="{{.Card.HintBelow}}">
 
+        {{if .Card.IsTypeIn}}
+        <div class="type-in">
+            <input type="text" name="choice" class="type-in-input"
+                   autocomplete="off" autocapitalize="off" autocorrect="off"
+                   spellcheck="false" autofocus required
+                   placeholder="Type the Swedish answer">
+            <button type="submit" class="btn primary type-in-submit">Check (Enter)</button>
+            <p class="hint muted">Diacritics are optional (<code>a</code> matches <code>ä</code>).</p>
+        </div>
+        {{else}}
         <div class="choice-grid">
             {{range .Card.Choices}}
             <button type="submit" name="choice" value="{{.}}" class="choice-btn">
@@ -104,6 +115,7 @@
             </button>
             {{end}}
         </div>
+        {{end}}
     </form>
 
     <div class="review-card-actions">

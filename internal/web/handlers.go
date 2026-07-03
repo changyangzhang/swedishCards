@@ -814,7 +814,14 @@ type quizCard struct {
 	IsTranslate      bool
 	IsFrontSwedish   bool // speaker button on front speaks Swedish
 	IsChoicesSwedish bool // speaker buttons next to choices speak Swedish
+	IsTypeIn         bool // render a text input instead of the choice grid
 }
+
+// typeInRepThreshold: cards with at least this many successful repetitions in
+// a row switch from multiple-choice to type-in for Swedish-answer modes
+// (mc_translate_rev, mc_cloze). SM-2 resets Repetitions to 0 on any wrong
+// answer, so this is effectively "you've gotten it right twice — now write it".
+const typeInRepThreshold = 2
 
 // lastResult drives the green/red ribbon shown above the new card after a pick.
 type lastResult struct {
@@ -921,6 +928,15 @@ func (s *Server) prepareQuizCard(ctx context.Context, card *store.ReviewCard) (*
 			q.HintBelow = clozeEnglish
 		}
 		distractorColumn = "cloze_answer"
+	}
+
+	// Type-in kicks in for Swedish-answer modes once the user has been getting
+	// this card right for a while — MC becomes too easy to eyeball. English-
+	// answer mode (mc_translate) stays MC since typing English isn't the goal.
+	if card.Repetitions >= typeInRepThreshold &&
+		(mode == ModeMCTranslateRev || mode == ModeMCCloze) {
+		q.IsTypeIn = true
+		return q, nil
 	}
 
 	distractors, err := s.store.GetDistractors(ctx, distractorColumn, card.ID, q.Correct, 3)
@@ -1046,7 +1062,7 @@ func (s *Server) handleReviewPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wasCorrect := strings.EqualFold(chosen, correct)
+	wasCorrect := answersMatch(chosen, correct)
 	rating := srs.RatingGood
 	if !wasCorrect {
 		rating = srs.RatingAgain

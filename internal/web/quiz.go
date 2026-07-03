@@ -51,3 +51,42 @@ func clozeBlankFor(token string) string {
 	trail := token[len(body):]
 	return "____" + trail
 }
+
+// normalizeAnswer collapses answers to a comparable form for type-in grading:
+// lower-case, trim whitespace/punctuation, and fold Swedish diacritics
+// (å→a, ä→a, ö→o) so phone users don't need the extra keyboard layer to score
+// a card correct. Multiple internal spaces collapse to one.
+func normalizeAnswer(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	s = strings.Trim(s, ".,!?;:\"'“”‘’()[]")
+	var b strings.Builder
+	b.Grow(len(s))
+	prevSpace := false
+	for _, r := range s {
+		switch r {
+		case 'å', 'ä':
+			r = 'a'
+		case 'ö':
+			r = 'o'
+		case 'é', 'è', 'ê':
+			r = 'e'
+		}
+		if r == ' ' || r == '\t' {
+			if prevSpace {
+				continue
+			}
+			prevSpace = true
+			b.WriteRune(' ')
+			continue
+		}
+		prevSpace = false
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// answersMatch is the grading rule for both MC and type-in review modes:
+// lenient case + diacritic-folded comparison. See normalizeAnswer.
+func answersMatch(a, b string) bool {
+	return normalizeAnswer(a) == normalizeAnswer(b)
+}
