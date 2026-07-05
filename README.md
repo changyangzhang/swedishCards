@@ -99,6 +99,10 @@ Standard Anki-style SM-2:
   due-again cards combined. The queue serves a ~30%/70% mix of new vs
   due-again, so you keep learning new material while maintaining what you
   already know.
+- **Relearn queue**: cards you get wrong today get re-served at the tail
+  of the session until you answer them correctly. Re-attempts do NOT
+  count against the daily target (the counter uses distinct cards, not
+  total review rows), so a mistake never eats into your remaining budget.
 
 ### Daily-cap UX
 The `/review` empty state explains *why* it's empty (target reached, all

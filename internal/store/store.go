@@ -969,13 +969,16 @@ func (s *Store) DiagnoseEmptyQueue(ctx context.Context) (*QueueDiagnostic, error
 		Scan(&d.DueWaiting); err != nil {
 		return nil, err
 	}
+	// Distinct-card counts so relearn re-attempts don't inflate the numbers
+	// shown in the empty-state UI.
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM reviews WHERE reviewed_at >= date('now')`).
+		`SELECT COUNT(DISTINCT card_id) FROM reviews WHERE reviewed_at >= date('now')`).
 		Scan(&d.ReviewsToday); err != nil {
 		return nil, err
 	}
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM reviews WHERE reviewed_at >= date('now') AND prev_interval = 0`).
+		`SELECT COUNT(DISTINCT card_id) FROM reviews
+		 WHERE reviewed_at >= date('now') AND prev_interval = 0`).
 		Scan(&d.NewIntroduced); err != nil {
 		return nil, err
 	}
@@ -1093,19 +1096,41 @@ func (s *Store) NextCardForReview(ctx context.Context, dailyTarget int, newTarge
 		return nil, nil
 	}
 
+	// totalToday counts DISTINCT cards reviewed today, so within-session
+	// re-attempts (relearn queue) don't burn the daily budget. newToday counts
+	// distinct cards whose first-today review was prev_interval=0.
 	var totalToday, newToday int
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT
-		   COUNT(*),
-		   COALESCE(SUM(CASE WHEN prev_interval = 0 THEN 1 ELSE 0 END), 0)
-		 FROM reviews
-		 WHERE reviewed_at >= date('now')`).Scan(&totalToday, &newToday); err != nil {
+		`SELECT COUNT(DISTINCT card_id) FROM reviews
+		 WHERE reviewed_at >= date('now')`).Scan(&totalToday); err != nil {
 		return nil, fmt.Errorf("count reviews today: %w", err)
 	}
-	if totalToday >= dailyTarget {
-		return nil, nil
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT card_id) FROM reviews
+		 WHERE reviewed_at >= date('now') AND prev_interval = 0`).Scan(&newToday); err != nil {
+		return nil, fmt.Errorf("count new today: %w", err)
 	}
 
+	// Under daily target: prefer fresh (new/due). If none, fall through to
+	// the relearn pool.
+	if totalToday < dailyTarget {
+		fresh, err := s.pickFreshCard(ctx, totalToday, newToday, newTargetRatio)
+		if err != nil {
+			return nil, err
+		}
+		if fresh != nil {
+			return fresh, nil
+		}
+	}
+
+	// Either we're at cap or there are no fresh cards left — serve the
+	// relearn queue (cards whose last review today was Again).
+	return s.peekRelearnCard(ctx)
+}
+
+// pickFreshCard returns the next new-or-due card given the current daily
+// counters, or nil if nothing fresh is available.
+func (s *Store) pickFreshCard(ctx context.Context, totalToday, newToday int, newTargetRatio float64) (*ReviewCard, error) {
 	dueCard, err := s.peekDueCard(ctx)
 	if err != nil {
 		return nil, err
@@ -1114,8 +1139,6 @@ func (s *Store) NextCardForReview(ctx context.Context, dailyTarget int, newTarge
 	if err != nil {
 		return nil, err
 	}
-
-	// If only one side is available, serve that.
 	if dueCard != nil && newCard == nil {
 		return dueCard, nil
 	}
@@ -1125,11 +1148,8 @@ func (s *Store) NextCardForReview(ctx context.Context, dailyTarget int, newTarge
 	if dueCard == nil && newCard == nil {
 		return nil, nil
 	}
-
 	// Both available — pick by ratio. If we haven't hit the new-card share
-	// yet, serve a new one; otherwise serve due. With totalToday==0 we treat
-	// the share as 0 so the FIRST card of the day is new whenever newRatio > 0
-	// — feels like the user is learning something fresh each session.
+	// yet, serve a new one; otherwise serve due.
 	var newShare float64
 	if totalToday > 0 {
 		newShare = float64(newToday) / float64(totalToday)
@@ -1138,6 +1158,30 @@ func (s *Store) NextCardForReview(ctx context.Context, dailyTarget int, newTarge
 		return newCard, nil
 	}
 	return dueCard, nil
+}
+
+// peekRelearnCard returns a card whose most-recent review today was Again
+// (rating=1) — i.e. still-wrong-today. These are re-served after the fresh
+// budget is exhausted so mistakes get drilled until correct, without burning
+// the daily cap.
+func (s *Store) peekRelearnCard(ctx context.Context) (*ReviewCard, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+reviewCardCols+` FROM cards c
+		 WHERE (
+		   SELECT rating FROM reviews r
+		   WHERE r.card_id = c.id AND r.reviewed_at >= date('now')
+		   ORDER BY r.reviewed_at DESC, r.id DESC LIMIT 1
+		 ) = 1
+		 ORDER BY (
+		   SELECT MAX(reviewed_at) FROM reviews r
+		   WHERE r.card_id = c.id AND r.reviewed_at >= date('now')
+		 ) ASC
+		 LIMIT 1`)
+	c, err := scanReviewCard(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return c, err
 }
 
 func (s *Store) peekDueCard(ctx context.Context) (*ReviewCard, error) {
