@@ -930,11 +930,10 @@ func (s *Server) prepareQuizCard(ctx context.Context, card *store.ReviewCard) (*
 		distractorColumn = "cloze_answer"
 	}
 
-	// Type-in kicks in for Swedish-answer modes once the user has been getting
-	// this card right for a while — MC becomes too easy to eyeball. English-
-	// answer mode (mc_translate) stays MC since typing English isn't the goal.
-	if card.Repetitions >= typeInRepThreshold &&
-		(mode == ModeMCTranslateRev || mode == ModeMCCloze) {
+	// Type-in kicks in for cloze mode once the user has been getting this card
+	// right for a while — MC becomes too easy to eyeball. Cloze only, so the
+	// answer is always a single word; full-sentence type-in is too punishing.
+	if mode == ModeMCCloze && card.Repetitions >= typeInRepThreshold {
 		q.IsTypeIn = true
 		return q, nil
 	}
