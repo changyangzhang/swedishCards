@@ -90,6 +90,11 @@ API (free, runs on-device) with `lang="sv-SE"`. Chrome on Android uses
 Google's neural Swedish voice; iOS Safari uses Apple's. Cloze placeholders
 are read as a pause, not "underscore".
 
+After you answer, the correct Swedish is **auto-spoken** as the next card
+slides in — the full filled sentence for cloze cards, or the correct word/
+phrase for translate cards. The answer click is the user gesture that
+unlocks autoplay, so no extra tap is needed.
+
 ### Spaced repetition (SM-2)
 Standard Anki-style SM-2:
 - Default ease factor 2.5; floored at 1.3.

@@ -43,6 +43,18 @@
         e.stopPropagation();
         speakSwedish(trigger.dataset.text);
     }, true);
+
+    // After each answer, HTMX swaps in the next card with a result ribbon
+    // carrying the correct Swedish sentence. Auto-play it so the user hears
+    // the full correct answer before moving on. The preceding choice click is
+    // the user gesture that unlocks speechSynthesis, so autoplay is allowed.
+    function autoplayRibbon(root) {
+        const el = (root || document).querySelector('.result-ribbon .ribbon-speak');
+        if (el && el.dataset.text) speakSwedish(el.dataset.text);
+    }
+    document.addEventListener('htmx:afterSwap', function (e) {
+        autoplayRibbon(e.target);
+    });
 </script>
 {{end}}
 
