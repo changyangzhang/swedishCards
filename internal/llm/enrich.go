@@ -71,7 +71,11 @@ func (c *Client) Enrich(ctx context.Context, entries []model.ParsedEntry) (*Resu
 		ResponseMIMEType:  "application/json",
 		ResponseSchema:    responseSchema(),
 		Temperature:       &temp,
-		MaxOutputTokens:   8192,
+		MaxOutputTokens:   16384,
+		// Disable "thinking" — for schema-constrained extraction it adds
+		// latency and, worse, consumes the output-token budget, which caused
+		// long imports to truncate mid-JSON. See parseContent for details.
+		ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr(int32(0))},
 	}
 
 	resp, err := c.sdk.Models.GenerateContent(ctx, c.model,
@@ -136,9 +140,59 @@ func (c *Client) ParseAndEnrich(ctx context.Context, rawText string) (*ParseResu
 	if strings.TrimSpace(rawText) == "" {
 		return &ParseResult{}, nil
 	}
-	return c.parseContent(ctx, []*genai.Content{
-		genai.NewContentFromText(rawText, genai.RoleUser),
-	})
+	chunks := splitForImport(rawText, importChunkChars)
+	if len(chunks) == 1 {
+		return c.parseContent(ctx, []*genai.Content{
+			genai.NewContentFromText(rawText, genai.RoleUser),
+		})
+	}
+
+	// Large paste: parse each chunk in its own call and merge. Sequential so
+	// we stay within the free tier's per-minute request budget; parseContent
+	// already retries transient 429/503. If any chunk fails, the whole import
+	// fails (the caller rolls back the note) so the user gets a clean retry.
+	merged := &ParseResult{}
+	for i, chunk := range chunks {
+		res, err := c.parseContent(ctx, []*genai.Content{
+			genai.NewContentFromText(chunk, genai.RoleUser),
+		})
+		if err != nil {
+			return nil, fmt.Errorf("chunk %d/%d: %w", i+1, len(chunks), err)
+		}
+		merged.Entries = append(merged.Entries, res.Entries...)
+		merged.ExampleSentences = append(merged.ExampleSentences, res.ExampleSentences...)
+	}
+	return merged, nil
+}
+
+// importChunkChars is the target max size of each parse chunk for large text
+// imports. Sized well under the model's output budget so even a chunk that's
+// all short vocab lines can't overflow the JSON response.
+const importChunkChars = 4000
+
+// splitForImport breaks rawText into line-aligned chunks of at most maxChars.
+// Splitting only ever happens on newline boundaries so a vocab entry is never
+// cut in half. Returns a single chunk when the text already fits.
+func splitForImport(rawText string, maxChars int) []string {
+	if len(rawText) <= maxChars {
+		return []string{rawText}
+	}
+	var chunks []string
+	var b strings.Builder
+	for _, line := range strings.SplitAfter(rawText, "\n") {
+		// A single monster line longer than maxChars gets its own chunk rather
+		// than being split mid-content — the model handles it, and it keeps the
+		// entry intact.
+		if b.Len() > 0 && b.Len()+len(line) > maxChars {
+			chunks = append(chunks, b.String())
+			b.Reset()
+		}
+		b.WriteString(line)
+	}
+	if b.Len() > 0 {
+		chunks = append(chunks, b.String())
+	}
+	return chunks
 }
 
 // ParseAndEnrichFile extracts text from an uploaded image or PDF using Gemini's
@@ -171,7 +225,12 @@ func (c *Client) parseContent(ctx context.Context, contents []*genai.Content) (*
 		ResponseMIMEType:  "application/json",
 		ResponseSchema:    parseResponseSchema(),
 		Temperature:       &temp,
-		MaxOutputTokens:   16384,
+		MaxOutputTokens:   32768,
+		// Thinking off: Gemini 2.5 Flash draws thinking tokens from the same
+		// MaxOutputTokens pool, so with it on a long import spends budget
+		// reasoning and truncates the JSON before closing the array — the
+		// "unexpected end of JSON input" failure. It's also markedly faster.
+		ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr(int32(0))},
 	}
 
 	var resp *genai.GenerateContentResponse
@@ -192,6 +251,10 @@ func (c *Client) parseContent(ctx context.Context, contents []*genai.Content) (*
 	}
 	if err != nil {
 		return nil, fmt.Errorf("gemini parse (after retries): %w", err)
+	}
+
+	if len(resp.Candidates) > 0 && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
+		return nil, fmt.Errorf("response truncated (hit MaxOutputTokens) — split this note into smaller chunks and import again")
 	}
 
 	raw := resp.Text()

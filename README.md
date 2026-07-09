@@ -1,157 +1,144 @@
 # Swedish Cards
 
-A personal, Clozemaster-style Swedish-learning web app. Paste raw lesson notes,
-get AI-enriched flashcards back, and review them daily with multiple-choice
-quizzes that vary every time you see a card.
+A personal, Clozemaster-style web app for learning Swedish. Feed it your raw
+lesson notes — or a photo of them — and it turns them into AI-enriched
+flashcards you review daily with quizzes that vary every time.
 
-Single-user app. Built for one person to learn Swedish; not designed for shared
-decks or multi-tenancy.
+Single-user by design: built for one person's deck, not shared decks or
+multi-tenancy.
 
-## Features
+## How it works
 
-### Notes → cards pipeline
-Two input modes on `/import`:
+```
+  notes / photo ──▶  Gemini parse + enrich  ──▶  cards  ──▶  daily review
+   (/import)          (translate, examples,        (SQLite)     (/review)
+                       cloze hints, typos)                     SM-2 schedule
+```
 
-1. **Paste text** into the textarea. Works for the classic `Swedish = English`
-   format and the heuristic parser handles it offline (no API key needed).
-2. **Upload a file** — image (PNG/JPG/HEIC/WebP), PDF, or .txt/.md. Up to 8 MB.
-   Photos of handwritten or printed Swedish notes work directly; Gemini's
-   multimodal API does OCR + parsing in a single call. No local OCR library.
+Two things you do: **import** notes to grow the deck, and **review** daily.
+Everything else (scheduling, quiz variation, audio, stats) happens around
+those two loops.
 
-A loading spinner shows on submit so you know the 10–30 s AI round-trip is in
-flight; the button disables to prevent double-submits.
+## Importing notes
 
-Each entry produces **exactly one card** (no duplicate cards per concept).
-Hash-based dedup: re-pasting the same notes or re-uploading the same file is
-a no-op.
+On `/import` you can either **paste text** or **upload a file** (image,
+PDF, or `.txt`/`.md`, up to 8 MB). A photo of handwritten or printed notes
+works directly — Gemini does OCR, parsing, and enrichment in one call, so
+there's no local OCR step. A spinner shows during the 10–30 s round-trip.
 
-### AI parsing + enrichment (Gemini 2.5 Flash, free tier)
-When `GEMINI_API_KEY` is set, Gemini handles BOTH parsing and enrichment in
-one call, calibrated for a B1/B2 learner — skips elementary words, focuses on:
+When `GEMINI_API_KEY` is set, Gemini handles parsing **and** enrichment
+together, calibrated for a B1/B2 learner — it skips elementary words and
+focuses on:
+
 - Idiomatic phrases and collocations (`ta tag i`, `ge sig av`)
 - Less-common vocabulary (`frånkopplad`, `utmattad`)
-- Full conversational sentences (`Hur är läget?`, `Hur ser det ut för dig?`)
-- Particle verbs and other grammar-rich infinitives
+- Full conversational sentences (`Hur är läget?`)
+- Particle verbs and grammar-rich infinitives
 
-For each entry Gemini also supplies:
-- English translation
-- One example sentence per word entry (used later for cloze prompts)
-- Smart cloze target words (which word in a sentence to blank)
-- One-sentence grammar notes (verb conjugation patterns, noun gender, etc.)
-- Typo flags ("Ingrendienser → Ingredienser")
+For each entry it also fills in an English translation, an example sentence
+(used later for cloze prompts), a smart cloze-target word, a one-line grammar
+note, and a typo flag when the source looks misspelled.
 
-Handles free-form notes the heuristic parser can't: section headers, tables,
-parenthetical clarifications, alternative-phrasing lists, bare Swedish
-without translations.
+**Robustness for big imports:**
+- Large text pastes are **auto-split** into ~4 KB line-aligned chunks (never
+  mid-entry), parsed sequentially, and merged — so a long note can't overflow
+  the model's JSON response.
+- "Thinking" is disabled on these calls: for schema-constrained extraction it
+  only adds latency and consumes the output-token budget.
+- Retries transient 503/429 with backoff. If parsing fails outright, the note
+  is rolled back so you get a clean retry.
 
-Uses the free Gemini API tier — no credit card needed. Retries on transient
-503/429 with backoff (2s, 5s, 8s). If parsing fails entirely the note row is
-rolled back so you can retry once Gemini is back.
+Each entry becomes **exactly one card**, and imports are hash-deduped —
+re-pasting the same notes or re-uploading the same file is a no-op.
 
-App degrades gracefully when `GEMINI_API_KEY` is unset: the textarea path
-still works via the heuristic parser; file uploads require the key.
+Without an API key the app still runs: the paste path falls back to an offline
+heuristic parser for the classic `Swedish = English` format. File uploads
+require the key (they need the multimodal model).
 
-### Multiple-choice review
-Every review is multiple-choice. Each render of a card picks **a fresh
-presentation at random**:
+## Reviewing
 
-| Mode | Prompt | Choices |
+Every review is a quiz, and **each render picks a fresh presentation** so the
+same card never looks identical twice:
+
+| Mode | Prompt | Answer |
 |---|---|---|
 | `mc_translate` | Swedish | 4 English options |
 | `mc_translate_rev` | English | 4 Swedish options |
-| `mc_cloze` | Swedish sentence with one word blanked | 4 Swedish word options |
+| `mc_cloze` | Swedish sentence, one word blanked | 4 Swedish word options |
 
-Reviewing the same card twice in a row never looks identical:
 - Distractors are pulled fresh each render (`ORDER BY RANDOM()`).
-- For cloze cards, the blanked word rotates — you might see
-  `Jag tränar med ____` once and `Jag ____ med vikter` next time.
-- For word entries that have a Gemini-generated example sentence attached,
-  the cloze mode uses that example so you drill the word in context.
+- For cloze cards the **blanked word rotates** — you might see
+  `Jag tränar med ____` once and `Jag ____ med vikter` the next time.
+- Word entries with an example sentence use it for the cloze, so you drill
+  the word in context.
 
-Auto-graded: correct → SM-2 `Good`; wrong → `Again`. No self-rating. A small
-ribbon at the top shows the previous answer's result before each new card.
+**Type-in difficulty ramp.** Once you've answered a cloze card correctly twice
+in a row (`repetitions >= 2`), `mc_cloze` switches from multiple choice to a
+text input — you type the blanked word. A ⌨️ badge marks the harder mode. Any
+wrong answer resets the streak and drops it back to MC. Grading is lenient:
+case-insensitive, diacritics optional (`tranar` matches `tränar`), trailing
+punctuation ignored. Type-in is cloze-only, so the answer is always a single
+word — you're never asked to reproduce a whole sentence.
 
-### Type-in mode (difficulty ramp)
-Once you've gotten a cloze card right twice in a row (`repetitions >= 2`),
-`mc_cloze` switches from multiple choice to a text input — you have to
-actually write the blanked Swedish word. A ⌨️ badge on the mode chip
-signals the harder mode. Any wrong answer resets `repetitions` to 0, so
-the card drops back to MC while you rebuild the streak.
+**Auto-graded, no self-rating.** Correct → SM-2 `Good`; wrong → `Again`. The
+next card slides in immediately with a green/red ribbon showing the previous
+result, and the correct Swedish is **auto-spoken** as it appears.
 
-- Cloze only: the answer is always a single word, so type-in never asks
-  you to reproduce a full sentence. Translation modes stay MC.
-- Grading is lenient: case-insensitive, diacritics optional
-  (`tranar` matches `tränar`), trailing punctuation ignored. Trains recall
-  without punishing phone-keyboard fumbles.
+**Relearn queue.** Cards you get wrong today are re-served at the tail of the
+session and keep coming back until you answer them correctly. Re-attempts do
+**not** count against your daily target (counting uses distinct cards, not
+review rows), so a mistake never eats into your remaining budget.
 
-### Text-to-speech
-🔊 buttons next to every Swedish text element. Uses the browser's Web Speech
-API (free, runs on-device) with `lang="sv-SE"`. Chrome on Android uses
-Google's neural Swedish voice; iOS Safari uses Apple's. Cloze placeholders
-are read as a pause, not "underscore".
+**Delete mid-session.** A 🗑 button on every card drops it from the deck if it
+isn't worth learning; the next card swaps in via HTMX with no reload.
 
-After you answer, the correct Swedish is **auto-spoken** as the next card
-slides in — the full filled sentence for cloze cards, or the correct word/
-phrase for translate cards. The answer click is the user gesture that
-unlocks autoplay, so no extra tap is needed.
+## Scheduling (SM-2)
 
-### Spaced repetition (SM-2)
 Standard Anki-style SM-2:
-- Default ease factor 2.5; floored at 1.3.
+
+- Default ease factor 2.5, floored at 1.3.
 - Intervals: 1 day → 6 days → `prev_interval × ease_factor`.
-- `Again` resets `repetitions` to 0 and bumps `lapses`.
-- **Daily review target** (configurable; default 10) covers BOTH new and
-  due-again cards combined. The queue serves a ~30%/70% mix of new vs
-  due-again, so you keep learning new material while maintaining what you
-  already know.
-- **Relearn queue**: cards you get wrong today get re-served at the tail
-  of the session until you answer them correctly. Re-attempts do NOT
-  count against the daily target (the counter uses distinct cards, not
-  total review rows), so a mistake never eats into your remaining budget.
+- `Again` resets repetitions to 0 and bumps lapses.
 
-### Daily-cap UX
-The `/review` empty state explains *why* it's empty (target reached, all
-caught up, etc.) and offers concrete actions:
-- **"Practice 5 more"** / **"Practice 10 more"** — bump the daily target
-  permanently (persisted to SQLite, takes effect immediately).
-- **"Review next card anyway"** — bypass the SM-2 schedule entirely and
-  serve the soonest-due card, regardless of its actual due time. SRS state
-  still updates from the early review.
+The **daily review target** (configurable; default 10) covers new and
+due-again cards *combined*. The queue serves a ~30% / 70% mix of new vs.
+due-again, so you keep learning while maintaining what you know.
 
-### Card management
-- `/cards` — paginated list. Filter by kind, due status, has-typo.
-- Per-row 🗑 to delete a single card (also deletes the underlying entry, so
-  the next backfill doesn't recreate it).
-- Bulk-select checkboxes + "Delete N selected" button.
-- ✎ to edit a card's front/back/cloze answer.
-- AI-suggested typo corrections appear at the top of `/cards` with
-  one-click **Accept** (rewrites the entry, regenerates cards) or
+When the queue empties, `/review` explains why and offers actions:
+- **Practice 5 / 10 more** — bumps the daily target (persisted to SQLite).
+- **Review next card anyway** — bypasses the schedule to serve the
+  soonest-due card. Reviewing early still updates SM-2 state.
+
+## Audio
+
+🔊 buttons sit next to every Swedish element, using the browser's Web Speech
+API (free, on-device) with `lang="sv-SE"` — Chrome/Android uses Google's
+neural voice, iOS Safari uses Apple's. After each answer the correct Swedish
+auto-plays as the next card appears (the answer click is the gesture that
+unlocks autoplay). Cloze placeholders are read as a pause, not "underscore".
+
+## Managing cards
+
+- `/cards` — paginated list; per-row ✎ edit and 🗑 delete, plus bulk-select
+  and "Delete N selected". Deleting a card removes its underlying entry so a
+  later backfill won't recreate it.
+- **Typo suggestions.** AI-flagged corrections appear at the top of `/cards`
+  with one-click **Accept** (rewrites the entry, regenerates cards) or
   **Dismiss**.
-- **🗑 Delete this card** button on every `/review` card — drop a card
-  mid-session if it isn't worth learning; the next card slides in via
-  HTMX swap (no full reload).
-
-### Stats
-`/stats` shows streak, total reviews, accuracy %, a 30-day reviews
-histogram, and a 14-day due-card forecast. All charts are inline SVG —
-no JS chart library.
-
-### Settings (`/settings`)
-Adjust the daily review target from the UI without touching `.env`. Saved
-value persists across restarts and overrides the env-var seed.
+- `/settings` — adjust the daily review target from the UI; the saved value
+  persists and overrides the env seed.
+- `/stats` — streak, total reviews, accuracy %, a 30-day reviews histogram,
+  and a 14-day due-card forecast, all as inline SVG (no JS chart library).
 
 ## Stack
 
-- **Backend**: Go 1.26, `chi` router, `html/template`, `slog`.
-- **Storage**: SQLite via `modernc.org/sqlite` (pure Go, no CGO). Single
-  file at `/data/swedish.db`.
-- **Frontend**: server-rendered HTML + [HTMX](https://htmx.org) for partial
-  swaps. Hand-rolled CSS (no Tailwind, no framework). Vanilla JS for
-  keyboard shortcuts and TTS.
-- **AI**: `google.golang.org/genai` (official Gen AI Go SDK), `responseSchema`
-  for structured output.
-- **Deploy**: Docker (distroless base, ~5MB binary). Ships to Fly.io with
-  the included `fly.toml`.
+- **Backend:** Go 1.26, `chi` router, `html/template`, `slog`.
+- **Storage:** SQLite via `modernc.org/sqlite` (pure Go, no CGO) — one file.
+- **Frontend:** server-rendered HTML + [HTMX](https://htmx.org) partial swaps.
+  Hand-rolled CSS, vanilla JS for keyboard shortcuts and TTS. No framework.
+- **AI:** `google.golang.org/genai` with `responseSchema` structured output
+  (Gemini 2.5 Flash, free tier).
+- **Deploy:** Docker (distroless, ~8 MB image) → Fly.io via `fly.toml`.
 
 ## Quick start (local)
 
@@ -160,26 +147,26 @@ git clone https://github.com/<you>/swedishCards.git
 cd swedishCards
 
 cp .env.example .env
-# Edit .env — at minimum, set GEMINI_API_KEY (free at
-# https://aistudio.google.com/apikey). BASIC_USER/BASIC_PASS optional
-# for local; required for any public deployment.
+# Set GEMINI_API_KEY (free at https://aistudio.google.com/apikey).
+# BASIC_USER/BASIC_PASS are optional locally, required for any public deploy.
 
 docker compose up -d --build
 open http://127.0.0.1:8080
 ```
 
-If port 8080 is taken on your machine, set `HTTP_PORT=8765` (or anything
-free) in `.env` and re-run `docker compose up -d`.
+If port 8080 is taken, set `HTTP_PORT=8765` (or anything free) in `.env` and
+re-run `docker compose up -d`.
 
 ## Environment variables
 
 | Var | Default | Purpose |
 |---|---|---|
-| `GEMINI_API_KEY` | _empty_ | Enables AI enrichment. Free tier at https://aistudio.google.com/apikey. App works without it. |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Override the model. |
-| `NEW_PER_DAY` | `10` | **Seed only** — first-run default for the daily review target (new + due combined). After that, the value in `/settings` (DB-persisted) wins. |
-| `BASIC_USER`, `BASIC_PASS` | _empty_ | HTTP Basic Auth. Both empty = auth disabled (fine for localhost; **set both before exposing the app publicly**). |
-| `DB_PATH` | `swedish.db` | SQLite file path. Docker compose mounts a host volume at `/data`. |
+| `GEMINI_API_KEY` | _empty_ | Enables AI parsing/enrichment. Free tier; app works without it (paste-only, heuristic parser). |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Model override. |
+| `NEW_PER_DAY` | `10` | **Seed only** — first-run default for the daily review target (new + due combined). After that `/settings` (DB-persisted) wins. |
+| `REVERSE_CARDS` | `false` | Also create English→Swedish cards for word/phrase/verb entries (roughly doubles vocab cards). |
+| `BASIC_USER`, `BASIC_PASS` | _empty_ | HTTP Basic Auth. Both empty = disabled (fine for localhost; **set both before exposing publicly**). |
+| `DB_PATH` | `swedish.db` | SQLite file path. Compose mounts a volume at `/data`. |
 | `HTTP_ADDR` | `:8080` | Listen address. |
 | `HTTP_PORT` | `8080` | Host port (compose only). |
 
@@ -194,52 +181,49 @@ flyctl deploy
 flyctl open
 ```
 
-`fly.toml` is checked in: single machine, 256 MB, Stockholm region,
-auto-stop when idle. Realistic cost for personal use: $0–2/month.
-
-Public deployment requires `BASIC_USER` + `BASIC_PASS` to be set, otherwise
-anyone with the URL can use your deck and burn your Gemini quota.
+`fly.toml` is checked in: single machine, 256 MB, Stockholm region, auto-stop
+when idle. Realistic personal-use cost: $0–2/month. Public deploys **require**
+`BASIC_USER` + `BASIC_PASS`, or anyone with the URL can use your deck and burn
+your Gemini quota.
 
 ## Project layout
 
 ```
 .
-├── main.go                          # thin entrypoint
-├── cmd/server/server.go             # wiring: db, router, signal handling
+├── main.go                    # thin entrypoint
+├── cmd/server/server.go       # wiring: db, router, signal handling
 ├── internal/
-│   ├── cards/generate.go            # entry → card (1:1 under the current model)
-│   ├── config/config.go             # env-var loading
-│   ├── llm/                         # Gemini client + structured-output schema
-│   ├── model/model.go               # Kind, CardType enums + shared types
-│   ├── parser/                      # heuristic parser + Swedish stop-words
-│   ├── srs/sm2.go                   # SM-2 math + tests
-│   ├── store/                       # SQLite + embedded schema + queries
+│   ├── cards/                 # entry → card (1:1)
+│   ├── config/                # env-var loading
+│   ├── llm/                   # Gemini client, prompts, chunking, schema
+│   ├── model/                 # Kind / CardType enums + shared types
+│   ├── parser/                # heuristic parser + Swedish stop-words
+│   ├── srs/                   # SM-2 math + tests
+│   ├── store/                 # SQLite: schema, queries, review queue
 │   └── web/
-│       ├── auth.go                  # HTTP basic auth middleware
-│       ├── handlers.go              # all HTTP handlers
-│       ├── quiz.go                  # rotateBlank, buildChoices (pure)
-│       ├── render.go                # template loading
-│       ├── router.go                # chi routes
-│       ├── static/app.css           # all styling
-│       └── templates/*.html         # server-rendered pages
-├── Dockerfile                       # multi-stage → distroless
-├── docker-compose.yml               # local dev stack
-└── fly.toml                         # Fly.io app config
+│       ├── auth.go            # HTTP basic auth middleware
+│       ├── handlers.go        # HTTP handlers
+│       ├── quiz.go            # cloze rotation, choice building, grading
+│       ├── router.go          # chi routes
+│       ├── static/app.css     # all styling
+│       └── templates/*.html   # server-rendered pages
+├── Dockerfile                 # multi-stage → distroless
+├── docker-compose.yml         # local dev stack
+└── fly.toml                   # Fly.io app config
 ```
 
 ## Privacy
 
-- Lesson notes, cards, and review history live in **one local SQLite file**.
-- Gemini API is called only at import time (one batched call per new note).
-  No data leaves the machine for review / SM-2 / stats.
-- File uploads (images/PDFs) are NOT stored — the bytes go to Gemini in the
-  request body, then the in-memory copy is garbage-collected. `notes.raw_text`
-  records only the filename + sha256 + size as a stable dedup identifier.
-- TTS runs entirely in the browser (Web Speech API) — no audio leaves the
-  device.
-- The `data/` directory is gitignored; never commit it.
+- Notes, cards, and review history live in **one local SQLite file**.
+- Gemini is called only at import time. Nothing leaves the machine for
+  review, scheduling, or stats.
+- Uploaded files are **not stored** — bytes go to Gemini in the request body,
+  then the in-memory copy is garbage-collected. The note row records only
+  filename + sha256 + size as a dedup identifier.
+- TTS runs entirely in the browser — no audio leaves the device.
+- `data/` is gitignored; never commit it.
 - Gemini's free tier may use inputs to improve Google's models per their
-  terms; upgrade to paid to opt out, or paste sensitive notes manually.
+  terms — upgrade to paid to opt out, or paste sensitive notes manually.
 
 ## License
 
