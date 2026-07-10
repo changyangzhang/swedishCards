@@ -320,6 +320,8 @@ func (s *Server) handleReviewDelete(w http.ResponseWriter, r *http.Request) {
 	data := quizData{Card: q}
 	if q == nil {
 		data.Empty = s.buildEmptyState(ctx)
+	} else {
+		data.Progress = s.buildProgress(ctx)
 	}
 	s.renderer.RenderPartial(w, "review", "card-area", data)
 }
@@ -846,10 +848,44 @@ type emptyState struct {
 	NextDueFront  string
 }
 
+// reviewProgress drives the "3 / 20" counter and progress bar shown above the
+// current card. Position is the 1-based index of the card on screen; Pct is
+// the share of the daily target already completed (for the bar width).
+type reviewProgress struct {
+	Position int
+	Target   int
+	Pct      int
+}
+
 type quizData struct {
-	Card  *quizCard
-	Last  *lastResult
-	Empty *emptyState
+	Card     *quizCard
+	Last     *lastResult
+	Empty    *emptyState
+	Progress *reviewProgress
+}
+
+// buildProgress computes the session progress shown while a card is on screen.
+// done = distinct cards already completed today; the card being shown is the
+// (done+1)-th. Returns nil when there's no target to measure against.
+func (s *Server) buildProgress(ctx context.Context) *reviewProgress {
+	target := s.dailyTarget(ctx)
+	if target <= 0 {
+		return nil
+	}
+	done, err := s.store.ReviewedTodayCount(ctx)
+	if err != nil {
+		slog.Warn("reviewed today count", "err", err)
+		return nil
+	}
+	pos := done + 1
+	if pos > target {
+		target = pos // practicing beyond the target: keep the bar sane
+	}
+	return &reviewProgress{
+		Position: pos,
+		Target:   target,
+		Pct:      done * 100 / target,
+	}
 }
 
 func (s *Server) prepareQuizCard(ctx context.Context, card *store.ReviewCard) (*quizCard, error) {
@@ -973,6 +1009,8 @@ func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
 	data := quizData{Card: q}
 	if q == nil {
 		data.Empty = s.buildEmptyState(ctx)
+	} else {
+		data.Progress = s.buildProgress(ctx)
 	}
 	s.renderer.Render(w, "review", data)
 }
@@ -1120,6 +1158,8 @@ func (s *Server) handleReviewPost(w http.ResponseWriter, r *http.Request) {
 	data := quizData{Card: q, Last: last}
 	if q == nil {
 		data.Empty = s.buildEmptyState(ctx)
+	} else {
+		data.Progress = s.buildProgress(ctx)
 	}
 	s.renderer.RenderPartial(w, "review", "card-area", data)
 }

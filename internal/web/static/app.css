@@ -286,6 +286,35 @@ table.cards tr:last-child td { border-bottom: none; }
     margin-top: 0.25rem;
 }
 
+/* Review-session progress (bar + "3 / 20" counter) */
+.review-progress {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin-bottom: 0.8rem;
+}
+.review-progress-bar {
+    flex: 1;
+    height: 8px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    overflow: hidden;
+}
+.review-progress-bar span {
+    display: block;
+    height: 100%;
+    background: var(--accent);
+    border-radius: 999px;
+    transition: width 0.3s ease;
+}
+.review-progress-count {
+    font-size: 0.8rem;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
 /* Mode badge (shows which presentation we picked this render) */
 .mode-badge {
     display: inline-block;

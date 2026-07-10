@@ -84,6 +84,11 @@ word — you're never asked to reproduce a whole sentence.
 next card slides in immediately with a green/red ribbon showing the previous
 result, and the correct Swedish is **auto-spoken** as it appears.
 
+**Progress bar.** A bar and `N / target` counter above each card track how
+far you are through today's session. The count uses distinct cards (relearn
+re-attempts don't inflate it), and the denominator grows if you practice
+beyond the target.
+
 **Relearn queue.** Cards you get wrong today are re-served at the tail of the
 session and keep coming back until you answer them correctly. Re-attempts do
 **not** count against your daily target (counting uses distinct cards, not

@@ -224,6 +224,16 @@ func (s *Store) CountNewCards(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// ReviewedTodayCount returns the number of DISTINCT cards reviewed today —
+// the same count that gates the daily target, so relearn re-attempts don't
+// inflate it. Used for the review-session progress bar.
+func (s *Store) ReviewedTodayCount(ctx context.Context) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(DISTINCT card_id) FROM reviews WHERE reviewed_at >= date('now')`).Scan(&n)
+	return n, err
+}
+
 type EntryRow struct {
 	ID                 int64
 	NoteID             int64
