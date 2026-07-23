@@ -10,7 +10,7 @@ multi-tenancy.
 ## How it works
 
 ```
-  notes / photo ──▶  Gemini parse + enrich  ──▶  cards  ──▶  daily review
+  notes / photo ──▶  GPT-5 parse + enrich  ──▶  cards  ──▶  daily review
    (/import)          (translate, examples,        (SQLite)     (/review)
                        cloze hints, typos)                     SM-2 schedule
 ```
@@ -23,10 +23,10 @@ those two loops.
 
 On `/import` you can either **paste text** or **upload a file** (image,
 PDF, or `.txt`/`.md`, up to 8 MB). A photo of handwritten or printed notes
-works directly — Gemini does OCR, parsing, and enrichment in one call, so
+works directly — GPT-5 does OCR, parsing, and enrichment in one call, so
 there's no local OCR step. A spinner shows during the 10–30 s round-trip.
 
-When `GEMINI_API_KEY` is set, Gemini handles parsing **and** enrichment
+When `OPENAI_API_KEY` is set, GPT-5 mini handles parsing **and** enrichment
 together, calibrated for a B1/B2 learner — it skips elementary words and
 focuses on:
 
@@ -43,9 +43,9 @@ note, and a typo flag when the source looks misspelled.
 - Large text pastes are **auto-split** into ~4 KB line-aligned chunks (never
   mid-entry), parsed sequentially, and merged — so a long note can't overflow
   the model's JSON response.
-- "Thinking" is disabled on these calls: for schema-constrained extraction it
-  only adds latency and consumes the output-token budget.
-- Retries transient 503/429 with backoff. If parsing fails outright, the note
+- Low `reasoning_effort` is used: for schema-constrained extraction it keeps
+  latency and cost down without hurting quality.
+- Retries transient 429/5xx with backoff. If parsing fails outright, the note
   is rolled back so you get a clean retry.
 
 Each entry becomes **exactly one card**, and imports are hash-deduped —
@@ -141,8 +141,9 @@ unlocks autoplay). Cloze placeholders are read as a pause, not "underscore".
 - **Storage:** SQLite via `modernc.org/sqlite` (pure Go, no CGO) — one file.
 - **Frontend:** server-rendered HTML + [HTMX](https://htmx.org) partial swaps.
   Hand-rolled CSS, vanilla JS for keyboard shortcuts and TTS. No framework.
-- **AI:** `google.golang.org/genai` with `responseSchema` structured output
-  (Gemini 2.5 Flash, free tier).
+- **AI:** OpenAI Chat Completions (GPT-5 mini) with strict `json_schema`
+  structured output + multimodal image/PDF input. Called over plain `net/http`
+  — no SDK dependency.
 - **Deploy:** Docker (distroless, ~8 MB image) → Fly.io via `fly.toml`.
 
 ## Quick start (local)
@@ -152,7 +153,7 @@ git clone https://github.com/<you>/swedishCards.git
 cd swedishCards
 
 cp .env.example .env
-# Set GEMINI_API_KEY (free at https://aistudio.google.com/apikey).
+# Set OPENAI_API_KEY (create one at https://platform.openai.com/api-keys).
 # BASIC_USER/BASIC_PASS are optional locally, required for any public deploy.
 
 docker compose up -d --build
@@ -166,8 +167,8 @@ re-run `docker compose up -d`.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `GEMINI_API_KEY` | _empty_ | Enables AI parsing/enrichment. Free tier; app works without it (paste-only, heuristic parser). |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Model override. |
+| `OPENAI_API_KEY` | _empty_ | Enables AI parsing/enrichment. App works without it (paste-only, heuristic parser); file uploads require it. |
+| `OPENAI_MODEL` | `gpt-5-mini` | Model override (e.g. `gpt-5-nano` for lower cost). |
 | `NEW_PER_DAY` | `10` | **Seed only** — first-run default for the daily review target (new + due combined). After that `/settings` (DB-persisted) wins. |
 | `REVERSE_CARDS` | `false` | Also create English→Swedish cards for word/phrase/verb entries (roughly doubles vocab cards). |
 | `BASIC_USER`, `BASIC_PASS` | _empty_ | HTTP Basic Auth. Both empty = disabled (fine for localhost; **set both before exposing publicly**). |
@@ -181,7 +182,7 @@ re-run `docker compose up -d`.
 flyctl auth login
 flyctl launch --copy-config --no-deploy
 flyctl volumes create data --region arn --size 1
-flyctl secrets set GEMINI_API_KEY=... BASIC_USER=... BASIC_PASS=...
+flyctl secrets set OPENAI_API_KEY=... BASIC_USER=... BASIC_PASS=...
 flyctl deploy
 flyctl open
 ```
@@ -189,7 +190,7 @@ flyctl open
 `fly.toml` is checked in: single machine, 256 MB, Stockholm region, auto-stop
 when idle. Realistic personal-use cost: $0–2/month. Public deploys **require**
 `BASIC_USER` + `BASIC_PASS`, or anyone with the URL can use your deck and burn
-your Gemini quota.
+your OpenAI credit.
 
 ## Project layout
 
@@ -200,7 +201,7 @@ your Gemini quota.
 ├── internal/
 │   ├── cards/                 # entry → card (1:1)
 │   ├── config/                # env-var loading
-│   ├── llm/                   # Gemini client, prompts, chunking, schema
+│   ├── llm/                   # OpenAI client, prompts, chunking, schema
 │   ├── model/                 # Kind / CardType enums + shared types
 │   ├── parser/                # heuristic parser + Swedish stop-words
 │   ├── srs/                   # SM-2 math + tests
@@ -220,15 +221,15 @@ your Gemini quota.
 ## Privacy
 
 - Notes, cards, and review history live in **one local SQLite file**.
-- Gemini is called only at import time. Nothing leaves the machine for
+- OpenAI is called only at import time. Nothing leaves the machine for
   review, scheduling, or stats.
-- Uploaded files are **not stored** — bytes go to Gemini in the request body,
+- Uploaded files are **not stored** — bytes go to OpenAI in the request body,
   then the in-memory copy is garbage-collected. The note row records only
   filename + sha256 + size as a dedup identifier.
 - TTS runs entirely in the browser — no audio leaves the device.
 - `data/` is gitignored; never commit it.
-- Gemini's free tier may use inputs to improve Google's models per their
-  terms — upgrade to paid to opt out, or paste sensitive notes manually.
+- OpenAI's API does not train on data sent via the API by default, but review
+  their current terms — or paste sensitive notes manually to keep them local.
 
 ## License
 

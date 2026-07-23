@@ -1,6 +1,6 @@
 package llm
 
-import "google.golang.org/genai"
+import "sort"
 
 const systemPrompt = `You are a Swedish-language tutor helping a learner organise lesson notes into spaced-repetition flashcards.
 
@@ -85,87 +85,75 @@ Rules for extraction:
 Use modern standard Swedish (rikssvenska). Be thorough but precise — every entry must be a small, real Swedish vocabulary item (word, phrase, verb, or short set expression) the learner would benefit from drilling. No entry should be a long sentence.
 `
 
-// parseResponseSchema constrains the JSON Gemini emits for ParseAndEnrich.
-// Entries are addressed by Swedish text (no source_index, since the input is
-// raw text rather than a pre-parsed array).
-func parseResponseSchema() *genai.Schema {
-	nullable := func() *bool { b := true; return &b }
-	str := genai.TypeString
-
-	return &genai.Schema{
-		Type: genai.TypeObject,
-		Properties: map[string]*genai.Schema{
-			"entries": {
-				Type: genai.TypeArray,
-				Items: &genai.Schema{
-					Type: genai.TypeObject,
-					Properties: map[string]*genai.Schema{
-						"swedish":              {Type: str},
-						"kind":                 {Type: str, Enum: []string{"word", "phrase", "verb", "sentence"}},
-						"english":              {Type: str},
-						"suggested_cloze_word": {Type: str, Nullable: nullable()},
-						"grammar_note":         {Type: str, Nullable: nullable()},
-						"typo_correction":      {Type: str, Nullable: nullable()},
-					},
-					Required: []string{"swedish", "kind", "english"},
-				},
-			},
-			"example_sentences": {
-				Type: genai.TypeArray,
-				Items: &genai.Schema{
-					Type: genai.TypeObject,
-					Properties: map[string]*genai.Schema{
-						"parent_swedish": {Type: str},
-						"swedish":        {Type: str},
-						"english":        {Type: str},
-						"target_word":    {Type: str},
-					},
-					Required: []string{"parent_swedish", "swedish", "english", "target_word"},
-				},
-			},
-		},
-		Required: []string{"entries"},
+// obj builds a strict OpenAI JSON-schema object node: additionalProperties is
+// always false and EVERY property is required (OpenAI strict mode mandates
+// both). Optional fields are expressed as nullable types instead of being
+// omitted from "required".
+func obj(props map[string]any) map[string]any {
+	required := make([]string, 0, len(props))
+	for k := range props {
+		required = append(required, k)
+	}
+	sort.Strings(required) // deterministic output
+	return map[string]any{
+		"type":                 "object",
+		"properties":           props,
+		"required":             required,
+		"additionalProperties": false,
 	}
 }
 
-// responseSchema is what we tell Gemini to enforce on its JSON output.
-func responseSchema() *genai.Schema {
-	nullable := func() *bool { b := true; return &b }
-	str := genai.TypeString
-	integer := genai.TypeInteger
+func arr(items map[string]any) map[string]any {
+	return map[string]any{"type": "array", "items": items}
+}
 
-	return &genai.Schema{
-		Type: genai.TypeObject,
-		Properties: map[string]*genai.Schema{
-			"entries": {
-				Type: genai.TypeArray,
-				Items: &genai.Schema{
-					Type: genai.TypeObject,
-					Properties: map[string]*genai.Schema{
-						"source_index":         {Type: integer},
-						"english":              {Type: str},
-						"kind_correction":      {Type: str, Enum: []string{"word", "phrase", "verb", "sentence", "unchanged"}},
-						"suggested_cloze_word": {Type: str, Nullable: nullable()},
-						"grammar_note":         {Type: str, Nullable: nullable()},
-						"typo_correction":      {Type: str, Nullable: nullable()},
-					},
-					Required: []string{"source_index", "english", "kind_correction"},
-				},
-			},
-			"example_sentences": {
-				Type: genai.TypeArray,
-				Items: &genai.Schema{
-					Type: genai.TypeObject,
-					Properties: map[string]*genai.Schema{
-						"source_index": {Type: integer},
-						"swedish":      {Type: str},
-						"english":      {Type: str},
-						"target_word":  {Type: str},
-					},
-					Required: []string{"source_index", "swedish", "english", "target_word"},
-				},
-			},
-		},
-		Required: []string{"entries"},
-	}
+// str/nullStr/enum/enumNull/intType are leaf schema helpers.
+var strType = map[string]any{"type": "string"}
+var intType = map[string]any{"type": "integer"}
+var nullStr = map[string]any{"type": []string{"string", "null"}}
+
+func enumStr(vals ...string) map[string]any {
+	return map[string]any{"type": "string", "enum": vals}
+}
+
+// parseResponseSchema constrains the JSON the model emits for ParseAndEnrich.
+// Entries are addressed by Swedish text (no source_index, since the input is
+// raw text rather than a pre-parsed array).
+func parseResponseSchema() map[string]any {
+	return obj(map[string]any{
+		"entries": arr(obj(map[string]any{
+			"swedish":              strType,
+			"kind":                 enumStr("word", "phrase", "verb", "sentence"),
+			"english":              strType,
+			"suggested_cloze_word": nullStr,
+			"grammar_note":         nullStr,
+			"typo_correction":      nullStr,
+		})),
+		"example_sentences": arr(obj(map[string]any{
+			"parent_swedish": strType,
+			"swedish":        strType,
+			"english":        strType,
+			"target_word":    strType,
+		})),
+	})
+}
+
+// responseSchema is what we tell the model to enforce for Enrich.
+func responseSchema() map[string]any {
+	return obj(map[string]any{
+		"entries": arr(obj(map[string]any{
+			"source_index":         intType,
+			"english":              strType,
+			"kind_correction":      enumStr("word", "phrase", "verb", "sentence", "unchanged"),
+			"suggested_cloze_word": nullStr,
+			"grammar_note":         nullStr,
+			"typo_correction":      nullStr,
+		})),
+		"example_sentences": arr(obj(map[string]any{
+			"source_index": intType,
+			"swedish":      strType,
+			"english":      strType,
+			"target_word":  strType,
+		})),
+	})
 }

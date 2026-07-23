@@ -35,29 +35,29 @@ func TestEnrich_DecodesResponse(t *testing.T) {
 		]
 	}`
 
-	// Gemini wraps the model output in a candidates[0].content.parts[0].text envelope.
-	gemini, _ := json.Marshal(map[string]any{
-		"candidates": []map[string]any{
+	// OpenAI wraps the model output in a choices[0].message.content envelope.
+	openaiResp, _ := json.Marshal(map[string]any{
+		"choices": []map[string]any{
 			{
-				"content": map[string]any{
-					"role":  "model",
-					"parts": []map[string]any{{"text": enrichJSON}},
-				},
-				"finishReason": "STOP",
+				"message":       map[string]any{"role": "assistant", "content": enrichJSON},
+				"finish_reason": "stop",
 			},
 		},
 	})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, "generateContent") {
+		if !strings.Contains(r.URL.Path, "chat/completions") {
 			t.Errorf("unexpected request path %q", r.URL.Path)
 		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Errorf("missing/wrong auth header: %q", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, string(gemini))
+		_, _ = io.WriteString(w, string(openaiResp))
 	}))
 	defer srv.Close()
 
-	c, err := NewClient(context.Background(), "test-key", "gemini-2.5-flash", Options{BaseURL: srv.URL})
+	c, err := NewClient(context.Background(), "test-key", "gpt-5-mini", Options{BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestEnrich_DecodesResponse(t *testing.T) {
 }
 
 func TestEnrich_MissingKey(t *testing.T) {
-	_, err := NewClient(context.Background(), "", "gemini-2.5-flash", Options{})
+	_, err := NewClient(context.Background(), "", "gpt-5-mini", Options{})
 	if err == nil {
 		t.Errorf("expected error for empty API key")
 	}

@@ -2,14 +2,21 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
-
-	"google.golang.org/genai"
 
 	"swedishCards/internal/model"
+)
+
+// Shared generation settings. reasoning_effort "low" suits schema-constrained
+// extraction (fast + cheap); the token caps are sized so long imports don't
+// truncate mid-JSON (large pastes are also chunked — see splitForImport).
+const (
+	reasoningEffort = "low"
+	maxParseTokens  = 32768
+	maxEnrichTokens = 16384
 )
 
 // EnrichedEntry is one row in the Gemini response's "entries" array.
@@ -65,35 +72,29 @@ func (c *Client) Enrich(ctx context.Context, entries []model.ParsedEntry) (*Resu
 		return nil, fmt.Errorf("marshal payload: %w", err)
 	}
 
-	temp := float32(0.2)
-	cfg := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
-		ResponseMIMEType:  "application/json",
-		ResponseSchema:    responseSchema(),
-		Temperature:       &temp,
-		MaxOutputTokens:   16384,
-		// Disable "thinking" — for schema-constrained extraction it adds
-		// latency and, worse, consumes the output-token budget, which caused
-		// long imports to truncate mid-JSON. See parseContent for details.
-		ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr(int32(0))},
-	}
-
-	resp, err := c.sdk.Models.GenerateContent(ctx, c.model,
-		[]*genai.Content{genai.NewContentFromText(string(userJSON), genai.RoleUser)},
-		cfg,
-	)
+	content, finish, err := c.doChat(ctx, chatRequest{
+		Model:               c.model,
+		MaxCompletionTokens: maxEnrichTokens,
+		ReasoningEffort:     reasoningEffort,
+		ResponseFormat:      jsonSchemaFormat("enrich_result", responseSchema()),
+		Messages: []chatMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: string(userJSON)},
+		},
+	})
 	if err != nil {
-		return nil, fmt.Errorf("gemini generate: %w", err)
+		return nil, fmt.Errorf("openai enrich: %w", err)
 	}
-
-	raw := resp.Text()
-	if raw == "" {
-		return nil, fmt.Errorf("empty response from gemini")
+	if finish == "length" {
+		return nil, fmt.Errorf("response truncated (hit max_completion_tokens)")
+	}
+	if content == "" {
+		return nil, fmt.Errorf("empty response from openai")
 	}
 
 	var result Result
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return nil, fmt.Errorf("decode response: %w (raw=%s)", err, truncate(raw, 500))
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return nil, fmt.Errorf("decode response: %w (raw=%s)", err, truncate(content, 500))
 	}
 	return &result, nil
 }
@@ -142,20 +143,16 @@ func (c *Client) ParseAndEnrich(ctx context.Context, rawText string) (*ParseResu
 	}
 	chunks := splitForImport(rawText, importChunkChars)
 	if len(chunks) == 1 {
-		return c.parseContent(ctx, []*genai.Content{
-			genai.NewContentFromText(rawText, genai.RoleUser),
-		})
+		return c.parseContent(ctx, textUserMessage(rawText))
 	}
 
 	// Large paste: parse each chunk in its own call and merge. Sequential so
-	// we stay within the free tier's per-minute request budget; parseContent
-	// already retries transient 429/503. If any chunk fails, the whole import
-	// fails (the caller rolls back the note) so the user gets a clean retry.
+	// we stay within the per-minute request budget; parseContent already
+	// retries transient 429/5xx. If any chunk fails, the whole import fails
+	// (the caller rolls back the note) so the user gets a clean retry.
 	merged := &ParseResult{}
 	for i, chunk := range chunks {
-		res, err := c.parseContent(ctx, []*genai.Content{
-			genai.NewContentFromText(chunk, genai.RoleUser),
-		})
+		res, err := c.parseContent(ctx, textUserMessage(chunk))
 		if err != nil {
 			return nil, fmt.Errorf("chunk %d/%d: %w", i+1, len(chunks), err)
 		}
@@ -206,76 +203,53 @@ func (c *Client) ParseAndEnrichFile(ctx context.Context, data []byte, mimeType s
 	if len(data) == 0 {
 		return &ParseResult{}, nil
 	}
-	parts := []*genai.Part{
-		{InlineData: &genai.Blob{MIMEType: mimeType, Data: data}},
-		{Text: "These are the learner's Swedish lesson notes (image or PDF). Read the content carefully and extract Swedish vocabulary items per the system instructions."},
+	dataURI := "data:" + mimeType + ";base64," + base64.StdEncoding.EncodeToString(data)
+	instruction := contentPart{
+		Type: "text",
+		Text: "These are the learner's Swedish lesson notes (image or PDF). Read the content carefully and extract Swedish vocabulary items per the system instructions.",
 	}
-	return c.parseContent(ctx, []*genai.Content{{
-		Role:  genai.RoleUser,
-		Parts: parts,
-	}})
+	// PDFs go through the "file" content part; images through "image_url".
+	var media contentPart
+	if mimeType == "application/pdf" {
+		media = contentPart{Type: "file", File: &filePart{Filename: "notes.pdf", FileData: dataURI}}
+	} else {
+		media = contentPart{Type: "image_url", ImageURL: &imageURL{URL: dataURI}}
+	}
+	return c.parseContent(ctx, []chatMessage{
+		{Role: "user", Content: []contentPart{instruction, media}},
+	})
 }
 
-// parseContent runs the parse-and-enrich call against arbitrary content
+// textUserMessage wraps plain text as a single user message.
+func textUserMessage(text string) []chatMessage {
+	return []chatMessage{{Role: "user", Content: text}}
+}
+
+// parseContent runs the parse-and-enrich call against arbitrary user messages
 // (text-only or multimodal). Shared by ParseAndEnrich and ParseAndEnrichFile.
-func (c *Client) parseContent(ctx context.Context, contents []*genai.Content) (*ParseResult, error) {
-	temp := float32(0.2)
-	cfg := &genai.GenerateContentConfig{
-		SystemInstruction: genai.NewContentFromText(parseSystemPrompt, genai.RoleUser),
-		ResponseMIMEType:  "application/json",
-		ResponseSchema:    parseResponseSchema(),
-		Temperature:       &temp,
-		MaxOutputTokens:   32768,
-		// Thinking off: Gemini 2.5 Flash draws thinking tokens from the same
-		// MaxOutputTokens pool, so with it on a long import spends budget
-		// reasoning and truncates the JSON before closing the array — the
-		// "unexpected end of JSON input" failure. It's also markedly faster.
-		ThinkingConfig: &genai.ThinkingConfig{ThinkingBudget: genai.Ptr(int32(0))},
-	}
+func (c *Client) parseContent(ctx context.Context, userMessages []chatMessage) (*ParseResult, error) {
+	messages := append([]chatMessage{{Role: "system", Content: parseSystemPrompt}}, userMessages...)
 
-	var resp *genai.GenerateContentResponse
-	var err error
-	for attempt := 0; attempt < 3; attempt++ {
-		resp, err = c.sdk.Models.GenerateContent(ctx, c.model, contents, cfg)
-		if err == nil {
-			break
-		}
-		if !isTransientGeminiError(err) {
-			return nil, fmt.Errorf("gemini parse: %w", err)
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(time.Duration(2+3*attempt) * time.Second):
-		}
-	}
+	content, finish, err := c.doChat(ctx, chatRequest{
+		Model:               c.model,
+		MaxCompletionTokens: maxParseTokens,
+		ReasoningEffort:     reasoningEffort,
+		ResponseFormat:      jsonSchemaFormat("parse_result", parseResponseSchema()),
+		Messages:            messages,
+	})
 	if err != nil {
-		return nil, fmt.Errorf("gemini parse (after retries): %w", err)
+		return nil, fmt.Errorf("openai parse: %w", err)
 	}
-
-	if len(resp.Candidates) > 0 && resp.Candidates[0].FinishReason == genai.FinishReasonMaxTokens {
-		return nil, fmt.Errorf("response truncated (hit MaxOutputTokens) — split this note into smaller chunks and import again")
+	if finish == "length" {
+		return nil, fmt.Errorf("response truncated (hit max_completion_tokens) — split this note into smaller chunks and import again")
 	}
-
-	raw := resp.Text()
-	if raw == "" {
-		return nil, fmt.Errorf("empty response from gemini parse")
+	if content == "" {
+		return nil, fmt.Errorf("empty response from openai parse")
 	}
 
 	var result ParseResult
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		return nil, fmt.Errorf("decode parse response: %w (raw=%s)", err, truncate(raw, 500))
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return nil, fmt.Errorf("decode parse response: %w (raw=%s)", err, truncate(content, 500))
 	}
 	return &result, nil
-}
-
-// isTransientGeminiError reports whether the error is one of Gemini's
-// "try again later" classes — 503 UNAVAILABLE (model overloaded) or 429
-// rate-limited. We retry these; we don't retry quota-exhaustion or 4xx
-// classes that won't change between attempts.
-func isTransientGeminiError(err error) bool {
-	s := err.Error()
-	return strings.Contains(s, "Error 503") ||
-		strings.Contains(s, "Error 429") ||
-		strings.Contains(s, "UNAVAILABLE")
 }

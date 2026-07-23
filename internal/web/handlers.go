@@ -51,8 +51,8 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		DueCount:   due,
 		NewCount:   new_,
 		TotalCount: total,
-		LLMEnabled: s.cfg.GeminiAPIKey != "",
-		LLMModel:   s.cfg.GeminiModel,
+		LLMEnabled: s.cfg.OpenAIAPIKey != "",
+		LLMModel:   s.cfg.OpenAIModel,
 	})
 }
 
@@ -164,7 +164,7 @@ func (s *Server) handleImportPost(w http.ResponseWriter, r *http.Request) {
 
 	if fileData != nil {
 		if s.llm == nil {
-			http.Error(w, "file uploads require GEMINI_API_KEY (multimodal parsing). Paste text into the textarea instead.", http.StatusBadRequest)
+			http.Error(w, "file uploads require OPENAI_API_KEY (multimodal parsing). Paste text into the textarea instead.", http.StatusBadRequest)
 			return
 		}
 		if !supportedUploadMIME(fileMIME) {
@@ -547,7 +547,7 @@ func (s *Server) applyEnrichment(
 func (s *Server) handleAdminEnrichPending(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	if s.llm == nil {
-		http.Error(w, "GEMINI_API_KEY not configured", http.StatusServiceUnavailable)
+		http.Error(w, "OPENAI_API_KEY not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -657,8 +657,8 @@ func (s *Server) handleSettingsGet(w http.ResponseWriter, r *http.Request) {
 	data := settingsData{
 		NewPerDay:  s.dailyTarget(ctx),
 		Saved:      r.URL.Query().Get("saved") == "1",
-		LLMEnabled: s.cfg.GeminiAPIKey != "",
-		LLMModel:   s.cfg.GeminiModel,
+		LLMEnabled: s.cfg.OpenAIAPIKey != "",
+		LLMModel:   s.cfg.OpenAIModel,
 	}
 	if d != nil {
 		data.NewIntroduced = d.NewIntroduced

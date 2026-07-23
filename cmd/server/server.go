@@ -47,8 +47,8 @@ func Run() error {
 	}
 
 	var llmClient *llm.Client
-	if cfg.GeminiAPIKey != "" {
-		llmClient, err = llm.NewClient(context.Background(), cfg.GeminiAPIKey, cfg.GeminiModel, llm.Options{})
+	if cfg.OpenAIAPIKey != "" {
+		llmClient, err = llm.NewClient(context.Background(), cfg.OpenAIAPIKey, cfg.OpenAIModel, llm.Options{})
 		if err != nil {
 			slog.Warn("LLM disabled: failed to init client", "err", err)
 			llmClient = nil
@@ -69,7 +69,7 @@ func Run() error {
 	}
 
 	go func() {
-		slog.Info("listening", "addr", cfg.HTTPAddr, "db", cfg.DBPath, "llm_enabled", cfg.GeminiAPIKey != "")
+		slog.Info("listening", "addr", cfg.HTTPAddr, "db", cfg.DBPath, "llm_enabled", cfg.OpenAIAPIKey != "")
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("listen", "err", err)
 			os.Exit(1)
