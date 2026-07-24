@@ -98,6 +98,31 @@ func TestBuildChoices_NoDistractors(t *testing.T) {
 	}
 }
 
+func TestLooksSwedish(t *testing.T) {
+	swedish := []string{
+		"Jag tränar med vikter",
+		"Hur är läget?",
+		"på nätet",
+		"förvirrad",
+	}
+	english := []string{
+		"I train with weights",
+		"How are things?",
+		"on the internet",
+		"convenient, practical",
+	}
+	for _, s := range swedish {
+		if !looksSwedish(s) {
+			t.Errorf("expected %q to look Swedish", s)
+		}
+	}
+	for _, e := range english {
+		if looksSwedish(e) {
+			t.Errorf("expected %q to look English", e)
+		}
+	}
+}
+
 func TestAnswersMatch_LenientOnDiacriticsAndCase(t *testing.T) {
 	cases := []struct {
 		a, b string

@@ -46,6 +46,14 @@ func stripTrailingPuncts(s string) string {
 	return strings.TrimRight(s, ".,!?;:\"")
 }
 
+// looksSwedish reports whether s appears to be Swedish rather than the English
+// translation we expect. Used to suppress a bogus cloze hint when the model
+// mistakenly returns Swedish in an "english" field. Swedish uses å/ä/ö, which
+// virtually never appear in English text, so their presence is a strong signal.
+func looksSwedish(s string) bool {
+	return strings.ContainsAny(s, "åäöÅÄÖ")
+}
+
 func clozeBlankFor(token string) string {
 	body := stripTrailingPuncts(token)
 	trail := token[len(body):]

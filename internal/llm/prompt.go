@@ -12,7 +12,7 @@ You'll receive a JSON array of parsed entries from the learner's raw notes. Each
 
 For EVERY input entry, emit one object in "entries" with:
 - source_index:         must equal the input "index"
-- english:              the best English translation. If the learner provided one, you may keep it or sharpen it without changing meaning. If empty, supply one.
+- english:              the best English translation, written in ENGLISH ONLY — never Swedish, never a copy of the Swedish text. If the learner provided one, you may keep it or sharpen it without changing meaning. If empty, supply one.
 - kind_correction:      "word" | "phrase" | "verb" | "sentence" | "unchanged". Use "unchanged" if the kind looks right.
 - suggested_cloze_word: for "sentence" and "sentence_untranslated" only — pick the target vocabulary word to blank (NOT a pronoun, article, auxiliary, preposition, or other stop word). Leave null for non-sentence kinds.
 - grammar_note:         one concise sentence about usage when it adds value (verb conjugation pattern, noun gender en/ett, plural form, adjective irregularity, register, common collocation). Null if nothing notable.
@@ -21,7 +21,7 @@ For EVERY input entry, emit one object in "entries" with:
 For each input entry whose kind is "word", "phrase", or "verb", ALSO add ONE entry to "example_sentences":
 - source_index: index of the source word entry
 - swedish:      a natural Swedish sentence using the word (5-10 words, beginner-suitable, idiomatic)
-- english:      a faithful English translation of that sentence
+- english:      a faithful translation of that sentence in ENGLISH ONLY — never Swedish, never a copy of the "swedish" field (it is shown as the learner's hint)
 - target_word:  the form of the word as it appears in the sentence (preserve inflection)
 
 Do NOT generate example sentences for entries whose kind is "sentence" or "sentence_untranslated".
@@ -59,7 +59,7 @@ SKIP entries that are too elementary for a B1/B2 speaker (single basic words lik
 For each, emit one object in "entries":
 - swedish:              canonical Swedish text as the user would write the card front. Preserve "Att " prefix for verb infinitives. Strip parenthetical clarifications into separate entries.
 - kind:                 "word" (single Swedish word) | "phrase" (multi-word, not a clause) | "verb" (infinitive, often with "Att ") | "sentence" (full clause with subject + verb).
-- english:              the best English translation. If the notes don't supply one, you supply it. Multiple translations OK, comma-separated.
+- english:              the best English translation, written in ENGLISH ONLY. Never Swedish, never a copy or light edit of the Swedish text — it must read as natural English. If the notes don't supply one, you supply it. Multiple translations OK, comma-separated.
 - suggested_cloze_word: for "sentence" kind only — the target vocabulary token to blank for cloze quizzes (not a stop word). Null otherwise.
 - grammar_note:         one short sentence on usage when notable (verb conjugation pattern, noun gender en/ett, plural form, register, common collocation). Null if not notable.
 - typo_correction:      ONLY when there's a clear misspelling; suggest the corrected form. Null otherwise.
@@ -67,7 +67,7 @@ For each, emit one object in "entries":
 For each "word" / "phrase" / "verb" entry, ALSO add ONE entry to "example_sentences":
 - parent_swedish:  the parent entry's "swedish" field (exact case-insensitive match).
 - swedish:         a natural Swedish sentence using the word (5-12 words, idiomatic, beginner-suitable).
-- english:         a faithful English translation.
+- english:         a faithful translation of that sentence, written in ENGLISH ONLY — never Swedish, never a copy of the "swedish" field. This is shown as the learner's hint, so it MUST be English.
 - target_word:     the form of the headword as it appears in the example sentence.
 
 Do NOT add example_sentences for "sentence" entries.

@@ -960,7 +960,10 @@ func (s *Server) prepareQuizCard(ctx context.Context, card *store.ReviewCard) (*
 		q.IsCloze = true
 		q.IsFrontSwedish = true
 		q.IsChoicesSwedish = true
-		if clozeEnglish != "" {
+		// Only show the English hint when it's actually English — the model
+		// occasionally echoes Swedish into the "english" field, which would
+		// render a confusing "Swedish sentence + Swedish hint" card.
+		if clozeEnglish != "" && !looksSwedish(clozeEnglish) {
 			q.HintBelow = clozeEnglish
 		}
 		distractorColumn = "cloze_answer"
