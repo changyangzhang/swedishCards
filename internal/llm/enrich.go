@@ -251,5 +251,10 @@ func (c *Client) parseContent(ctx context.Context, userMessages []chatMessage) (
 	if err := json.Unmarshal([]byte(content), &result); err != nil {
 		return nil, fmt.Errorf("decode parse response: %w (raw=%s)", err, truncate(content, 500))
 	}
+
+	// The combined prompt occasionally leaves an english field blank or fills
+	// it with Swedish. Repair those with a dedicated translation call so cards
+	// always get a real English translation / cloze hint.
+	c.repairTranslations(ctx, &result)
 	return &result, nil
 }

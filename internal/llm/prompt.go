@@ -85,6 +85,15 @@ Rules for extraction:
 Use modern standard Swedish (rikssvenska). Be thorough but precise — every entry must be a small, real Swedish vocabulary item (word, phrase, verb, or short set expression) the learner would benefit from drilling. No entry should be a long sentence.
 `
 
+const translateSystemPrompt = `You are a Swedish-to-English translator. The input is a JSON array of Swedish texts (words, phrases, or sentences).
+
+For each input text, return an object with:
+- swedish: the original Swedish text, exactly as given.
+- english: its natural English translation.
+
+The "english" value MUST be in ENGLISH ONLY — never Swedish, never a copy of the input. Keep translations concise and idiomatic. Return one object per input text, in the same order.
+`
+
 // obj builds a strict OpenAI JSON-schema object node: additionalProperties is
 // always false and EVERY property is required (OpenAI strict mode mandates
 // both). Optional fields are expressed as nullable types instead of being
