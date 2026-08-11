@@ -615,17 +615,55 @@ type cardsData struct {
 	Rows  []cardRow
 	Total int
 	Typos []store.TypoSuggestion
+
+	// Sort + pagination state (also used to build header/pager links).
+	Sort       string
+	Dir        string
+	Page       int
+	TotalPages int
+	HasPrev    bool
+	HasNext    bool
+	PrevPage   int
+	NextPage   int
+	RangeFrom  int // 1-based index of first row shown
+	RangeTo    int // 1-based index of last row shown
 }
+
+// cardsPageSize is how many cards show per page on /cards.
+const cardsPageSize = 50
 
 func (s *Server) handleCardsList(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	rows, err := s.store.ListCards(ctx, 200, 0)
+
+	sortKey := r.URL.Query().Get("sort")
+	if _, ok := store.CardSortKey(sortKey); !ok {
+		sortKey = "id"
+	}
+	dir := "desc"
+	if strings.EqualFold(r.URL.Query().Get("dir"), "asc") {
+		dir = "asc"
+	}
+
+	total, _ := s.store.CountCards(ctx)
+	totalPages := (total + cardsPageSize - 1) / cardsPageSize
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	page := 1
+	if p, err := strconv.Atoi(r.URL.Query().Get("page")); err == nil && p > 1 {
+		page = p
+	}
+	if page > totalPages {
+		page = totalPages
+	}
+	offset := (page - 1) * cardsPageSize
+
+	rows, err := s.store.ListCards(ctx, cardsPageSize, offset, sortKey, dir)
 	if err != nil {
 		slog.Error("list cards", "err", err)
 		http.Error(w, "store error", http.StatusInternalServerError)
 		return
 	}
-	total, _ := s.store.CountCards(ctx)
 
 	out := make([]cardRow, 0, len(rows))
 	now := time.Now()
@@ -640,7 +678,25 @@ func (s *Server) handleCardsList(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	typos, _ := s.store.ListPendingTypos(ctx)
-	s.renderer.Render(w, "cards", cardsData{Rows: out, Total: total, Typos: typos})
+
+	data := cardsData{
+		Rows:       out,
+		Total:      total,
+		Typos:      typos,
+		Sort:       sortKey,
+		Dir:        dir,
+		Page:       page,
+		TotalPages: totalPages,
+		HasPrev:    page > 1,
+		HasNext:    page < totalPages,
+		PrevPage:   page - 1,
+		NextPage:   page + 1,
+	}
+	if total > 0 {
+		data.RangeFrom = offset + 1
+		data.RangeTo = offset + len(out)
+	}
+	s.renderer.Render(w, "cards", data)
 }
 
 type settingsData struct {

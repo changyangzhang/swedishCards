@@ -5,7 +5,7 @@
 {{if .Typos}}
 <section class="typo-list">
     <h2>AI suggestions <span class="muted">({{len .Typos}})</span></h2>
-    <p class="hint">Gemini spotted these possible spelling fixes. Accept rewrites the entry and regenerates its cards (review history for those cards is lost). Dismiss keeps the original text.</p>
+    <p class="hint">The AI spotted these possible spelling fixes. Accept rewrites the entry and regenerates its cards (review history for those cards is lost). Dismiss keeps the original text.</p>
     {{range .Typos}}
     <div class="typo-row">
         <div class="typo-text">
@@ -51,11 +51,11 @@
             <th class="col-check">
                 <input type="checkbox" id="check-all" aria-label="Select all">
             </th>
-            <th>Front</th>
-            <th class="col-back">Back</th>
-            <th>Kind</th>
-            <th>Reps</th>
-            <th>Due</th>
+            <th><a class="sort-link" href="?sort=front&dir={{nextDir "front" $.Sort $.Dir}}">Front{{sortArrow "front" $.Sort $.Dir}}</a></th>
+            <th class="col-back"><a class="sort-link" href="?sort=back&dir={{nextDir "back" $.Sort $.Dir}}">Back{{sortArrow "back" $.Sort $.Dir}}</a></th>
+            <th><a class="sort-link" href="?sort=kind&dir={{nextDir "kind" $.Sort $.Dir}}">Kind{{sortArrow "kind" $.Sort $.Dir}}</a></th>
+            <th><a class="sort-link" href="?sort=reps&dir={{nextDir "reps" $.Sort $.Dir}}">Reps{{sortArrow "reps" $.Sort $.Dir}}</a></th>
+            <th><a class="sort-link" href="?sort=due&dir={{nextDir "due" $.Sort $.Dir}}">Due{{sortArrow "due" $.Sort $.Dir}}</a></th>
             <th></th>
         </tr>
         </thead>
@@ -65,11 +65,11 @@
             <td class="col-check">
                 <input type="checkbox" class="card-check" name="card_ids" value="{{.ID}}" form="bulk-delete-form" aria-label="Select card">
             </td>
-            <td>{{.Front}}</td>
-            <td class="col-back">{{.Back}}</td>
-            <td><span class="kind kind-{{.Kind}}">{{.Kind}}</span></td>
-            <td>{{.Reps}}</td>
-            <td>{{.DueRel}}</td>
+            <td class="col-front">{{.Front}}</td>
+            <td class="col-back" data-label="Back">{{.Back}}</td>
+            <td data-label="Kind"><span class="kind kind-{{.Kind}}">{{.Kind}}</span></td>
+            <td data-label="Reps">{{.Reps}}</td>
+            <td data-label="Due">{{.DueRel}}</td>
             <td class="row-actions">
                 <a href="/cards/{{.ID}}/edit" class="edit-link" title="Edit card">✎</a>
                 <form method="post" action="/cards/{{.ID}}/delete" style="display:inline"
@@ -82,6 +82,22 @@
         </tbody>
     </table>
 </div>
+
+{{if gt .TotalPages 1}}
+<nav class="pager" aria-label="Pagination">
+    {{if .HasPrev}}
+    <a class="btn btn-sm" href="?page={{.PrevPage}}&sort={{.Sort}}&dir={{.Dir}}" rel="prev">← Prev</a>
+    {{else}}
+    <span class="btn btn-sm disabled" aria-disabled="true">← Prev</span>
+    {{end}}
+    <span class="pager-info">Page {{.Page}} / {{.TotalPages}} <span class="muted">({{.RangeFrom}}–{{.RangeTo}} of {{.Total}})</span></span>
+    {{if .HasNext}}
+    <a class="btn btn-sm" href="?page={{.NextPage}}&sort={{.Sort}}&dir={{.Dir}}" rel="next">Next →</a>
+    {{else}}
+    <span class="btn btn-sm disabled" aria-disabled="true">Next →</span>
+    {{end}}
+</nav>
+{{end}}
 
 <script>
     (function () {

@@ -22,6 +22,24 @@ type Renderer struct {
 // templateFuncs are available in every page template.
 var templateFuncs = template.FuncMap{
 	"sub": func(a, b int) int { return a - b },
+	// nextDir gives the sort direction a column header link should request:
+	// toggle to desc if it's the active asc column, otherwise asc.
+	"nextDir": func(key, curSort, curDir string) string {
+		if key == curSort && curDir == "asc" {
+			return "desc"
+		}
+		return "asc"
+	},
+	// sortArrow renders the active-sort indicator for a column header.
+	"sortArrow": func(key, curSort, curDir string) string {
+		if key != curSort {
+			return ""
+		}
+		if curDir == "asc" {
+			return " ▲"
+		}
+		return " ▼"
+	},
 }
 
 func NewRenderer() (*Renderer, error) {

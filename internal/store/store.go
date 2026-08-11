@@ -170,11 +170,42 @@ type CardListRow struct {
 	Reps       int
 }
 
-func (s *Store) ListCards(ctx context.Context, limit, offset int) ([]CardListRow, error) {
-	rows, err := s.db.QueryContext(ctx, `
+// cardSortColumns whitelists the sortable columns to their SQL expressions.
+// Using a fixed map (never raw user input) keeps ORDER BY injection-safe.
+var cardSortColumns = map[string]string{
+	"front": "c.front",
+	"back":  "c.back",
+	"kind":  "e.kind",
+	"reps":  "c.repetitions",
+	"due":   "c.due_at",
+	"id":    "c.id",
+}
+
+// CardSortKey reports whether key is a valid sortable column, returning its
+// SQL expression. Lets the web layer validate ?sort= without duplicating the
+// whitelist.
+func CardSortKey(key string) (string, bool) {
+	col, ok := cardSortColumns[key]
+	return col, ok
+}
+
+// ListCards returns one page of cards. sortKey must be a key of
+// cardSortColumns (falls back to "id"); dir is "asc" or "desc" (default desc).
+// c.id is always appended as a tiebreaker for a stable order across pages.
+func (s *Store) ListCards(ctx context.Context, limit, offset int, sortKey, dir string) ([]CardListRow, error) {
+	col, ok := cardSortColumns[sortKey]
+	if !ok {
+		col = "c.id"
+	}
+	order := "DESC"
+	if strings.EqualFold(dir, "asc") {
+		order = "ASC"
+	}
+	q := fmt.Sprintf(`
 		SELECT c.id, c.card_type, c.front, c.back, e.swedish_raw, e.kind, c.due_at, c.last_reviewed, c.repetitions
 		FROM cards c JOIN entries e ON e.id = c.entry_id
-		ORDER BY c.id DESC LIMIT ? OFFSET ?`, limit, offset)
+		ORDER BY %s %s, c.id DESC LIMIT ? OFFSET ?`, col, order)
+	rows, err := s.db.QueryContext(ctx, q, limit, offset)
 	if err != nil {
 		return nil, err
 	}
